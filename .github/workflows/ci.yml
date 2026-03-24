@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check, Clippy, Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path rust/Cargo.toml
+
+      - name: Build release
+        run: cargo build --manifest-path rust/Cargo.toml --release
+
+      - name: Dogfood
+        run: ./target/release/ast-scan rust/src --rust --json > /dev/null

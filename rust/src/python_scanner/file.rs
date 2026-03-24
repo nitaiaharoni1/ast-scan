@@ -1,0 +1,286 @@
+//! Per-file Python scanning (`analyze_py_file`).
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+use rustpython_parser::{
+    ast::Ranged,
+    ast::{self, Constant, Expr, Mod, Stmt},
+    parse, Mode,
+};
+
+use crate::audits::collect_todo_comments;
+use crate::types::{ImportEdge, PyClassInfo, PyFileData, PyFuncInfo, RouteInfo};
+
+use super::visitors::{
+    collect_silent_excepts, compute_complexity, compute_max_nesting, decorator_repr, extract_route,
+    line_at, line_at_end, process_import,
+};
+use super::{display_rel, file_to_module};
+
+/// Append string literals from `__all__ = [...]` / tuple / set initializers.
+fn collect_all_export_strings(expr: &Expr, exports: &mut Vec<String>) {
+    match expr {
+        Expr::List(l) => {
+            for elt in &l.elts {
+                if let Expr::Constant(c) = elt {
+                    if let Constant::Str(s) = &c.value {
+                        exports.push(s.clone());
+                    }
+                }
+            }
+        }
+        Expr::Tuple(t) => {
+            for elt in &t.elts {
+                if let Expr::Constant(c) = elt {
+                    if let Constant::Str(s) = &c.value {
+                        exports.push(s.clone());
+                    }
+                }
+            }
+        }
+        Expr::Set(s) => {
+            for elt in &s.elts {
+                if let Expr::Constant(c) = elt {
+                    if let Constant::Str(st) = &c.value {
+                        exports.push(st.clone());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+struct FileAnalyzer<'a> {
+    filepath: &'a str,
+    module: &'a str,
+    pkg: &'a str,
+    source: &'a str,
+    functions: Vec<PyFuncInfo>,
+    classes: Vec<PyClassInfo>,
+    imports: Vec<ImportEdge>,
+    exports: Vec<String>,
+    top_level_names: Vec<String>,
+    routes: Vec<RouteInfo>,
+    class_stack: Vec<String>,
+}
+
+impl<'a> FileAnalyzer<'a> {
+    fn new(filepath: &'a str, module: &'a str, pkg: &'a str, source: &'a str) -> Self {
+        Self {
+            filepath,
+            module,
+            pkg,
+            source,
+            functions: Vec::new(),
+            classes: Vec::new(),
+            imports: Vec::new(),
+            exports: Vec::new(),
+            top_level_names: Vec::new(),
+            routes: Vec::new(),
+            class_stack: Vec::new(),
+        }
+    }
+
+    fn process_function(&mut self, node: &ast::StmtFunctionDef, is_method: bool) -> PyFuncInfo {
+        let line = line_at(self.source, node.range().start());
+        let end_line = line_at_end(self.source, node.range().end());
+        let qualname = if self.class_stack.is_empty() {
+            node.name.to_string()
+        } else {
+            format!("{}.{}", self.class_stack.join("."), node.name)
+        };
+        let complexity = compute_complexity(&node.body);
+        let nesting = compute_max_nesting(&node.body);
+        let decorators: Vec<_> = node.decorator_list.iter().map(decorator_repr).collect();
+        let info = PyFuncInfo {
+            name: node.name.to_string(),
+            qualname: qualname.clone(),
+            file: self.filepath.to_string(),
+            line,
+            end_line,
+            line_count: end_line.saturating_sub(line) + 1,
+            complexity,
+            nesting,
+            decorators: decorators.clone(),
+            is_method,
+        };
+        if let Some(r) = extract_route(
+            node.name.as_ref(),
+            &qualname,
+            self.filepath,
+            line,
+            &node.decorator_list,
+            &node.body,
+        ) {
+            self.routes.push(r);
+        }
+        self.functions.push(info.clone());
+        info
+    }
+
+    fn process_async_function(
+        &mut self,
+        node: &ast::StmtAsyncFunctionDef,
+        is_method: bool,
+    ) -> PyFuncInfo {
+        let line = line_at(self.source, node.range().start());
+        let end_line = line_at_end(self.source, node.range().end());
+        let qualname = if self.class_stack.is_empty() {
+            node.name.to_string()
+        } else {
+            format!("{}.{}", self.class_stack.join("."), node.name)
+        };
+        let complexity = compute_complexity(&node.body);
+        let nesting = compute_max_nesting(&node.body);
+        let decorators: Vec<_> = node.decorator_list.iter().map(decorator_repr).collect();
+        let info = PyFuncInfo {
+            name: node.name.to_string(),
+            qualname: qualname.clone(),
+            file: self.filepath.to_string(),
+            line,
+            end_line,
+            line_count: end_line.saturating_sub(line) + 1,
+            complexity,
+            nesting,
+            decorators: decorators.clone(),
+            is_method,
+        };
+        if let Some(r) = extract_route(
+            node.name.as_ref(),
+            &qualname,
+            self.filepath,
+            line,
+            &node.decorator_list,
+            &node.body,
+        ) {
+            self.routes.push(r);
+        }
+        self.functions.push(info.clone());
+        info
+    }
+
+    fn process_class(&mut self, node: &ast::StmtClassDef) {
+        let line = line_at(self.source, node.range().start());
+        let end_line = line_at_end(self.source, node.range().end());
+        let mut cls = PyClassInfo {
+            name: node.name.to_string(),
+            file: self.filepath.to_string(),
+            line,
+            end_line,
+            line_count: end_line.saturating_sub(line) + 1,
+            methods: Vec::new(),
+            decorators: node.decorator_list.iter().map(decorator_repr).collect(),
+        };
+        self.class_stack.push(node.name.to_string());
+        for item in &node.body {
+            match item {
+                Stmt::FunctionDef(f) => {
+                    let fi = self.process_function(f, true);
+                    cls.methods.push(fi);
+                }
+                Stmt::AsyncFunctionDef(f) => {
+                    let fi = self.process_async_function(f, true);
+                    cls.methods.push(fi);
+                }
+                _ => {}
+            }
+        }
+        self.class_stack.pop();
+        self.classes.push(cls);
+    }
+
+    fn visit_module(&mut self, body: &[Stmt]) {
+        for item in body {
+            match item {
+                Stmt::FunctionDef(f) => {
+                    self.process_function(f, false);
+                    self.top_level_names.push(f.name.to_string());
+                }
+                Stmt::AsyncFunctionDef(f) => {
+                    self.process_async_function(f, false);
+                    self.top_level_names.push(f.name.to_string());
+                }
+                Stmt::ClassDef(c) => {
+                    self.process_class(c);
+                    self.top_level_names.push(c.name.to_string());
+                }
+                Stmt::Assign(a) => {
+                    for t in &a.targets {
+                        if let Expr::Name(n) = t {
+                            self.top_level_names.push(n.id.to_string());
+                            if n.id.as_str() == "__all__" {
+                                collect_all_export_strings(a.value.as_ref(), &mut self.exports);
+                            }
+                        }
+                    }
+                }
+                Stmt::AnnAssign(a) => {
+                    if let Expr::Name(n) = a.target.as_ref() {
+                        self.top_level_names.push(n.id.to_string());
+                    }
+                }
+                Stmt::Import(_) | Stmt::ImportFrom(_) => {
+                    process_import(item, self.module, self.pkg, &mut self.imports);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+pub(super) enum PyFileScanItem {
+    /// Boxed so the enum stays small on worker-thread stacks (clippy large_enum_variant).
+    Data(Box<PyFileData>),
+    ParseError {
+        rel: String,
+        message: String,
+    },
+}
+
+pub(super) fn analyze_py_file(fpath: &Path, scan_root: &Path, pkg: &str) -> Option<PyFileScanItem> {
+    let module = file_to_module(fpath, scan_root, pkg);
+    let source = fs::read_to_string(fpath)
+        .unwrap_or_default()
+        .replace('\r', "");
+    let rel = display_rel(fpath, scan_root);
+    let line_count = source.matches('\n').count() + 1;
+
+    let body = match parse(&source, Mode::Module, &fpath.display().to_string()) {
+        Ok(Mod::Module(m)) => m.body,
+        Ok(_) => return None,
+        Err(e) => {
+            return Some(PyFileScanItem::ParseError {
+                rel,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    let abs = fpath.display().to_string();
+    let mut an = FileAnalyzer::new(&abs, &module, pkg, &source);
+    an.visit_module(&body);
+
+    let mut todo_freq = HashMap::new();
+    let mut todo_samples = HashMap::new();
+    collect_todo_comments(&source, &rel, &mut todo_freq, &mut todo_samples);
+
+    let mut silent_excepts = Vec::new();
+    collect_silent_excepts(&body, &rel, &source, &mut silent_excepts);
+
+    Some(PyFileScanItem::Data(Box::new(PyFileData {
+        module: module.clone(),
+        rel_path: rel,
+        line_count,
+        functions: an.functions,
+        classes: an.classes,
+        imports: an.imports,
+        top_level_names: an.top_level_names,
+        routes: an.routes,
+        silent_excepts,
+        todo_freq,
+        todo_samples,
+    })))
+}

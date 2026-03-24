@@ -1,3 +1,9 @@
+# Rust / Cargo (workspace + per-crate build output)
+/target/
+rust/target/
+# Workspace uses root Cargo.lock only
+rust/Cargo.lock
+
 .DS_Store
 *.pyc
 __pycache__/
@@ -9,3 +15,6 @@ node_modules/
 *.egg-info/
 .eggs/
 build/
+
+# Local ast-scan JSON dump (regenerate via scripts/self_scan_insights.py)
+.scan-report.json

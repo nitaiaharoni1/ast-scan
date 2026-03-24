@@ -1,0 +1,273 @@
+========================================================================
+  RUST — AST ANALYSIS (Rust)
+========================================================================
+
+  Files analyzed:      19
+  Total lines:         7,117
+  Functions:           312
+  Structs / enums:     52
+  Traits:              1
+  Internal imports:    114
+  External imports:    124
+
+========================================================================
+  1. INVENTORY — Top 20 Largest Files
+========================================================================
+    806 lines  ts_scanner/file.rs
+    754 lines  python_scanner/visitors.rs
+    612 lines  rust_scanner/file.rs
+    580 lines  main.rs
+    512 lines  report/typescript.rs
+    478 lines  ts_scanner/mod.rs
+    442 lines  ts_scanner/visitors.rs
+    428 lines  rust_scanner/mod.rs
+    375 lines  python_scanner/mod.rs
+    349 lines  report/rust_report.rs
+    287 lines  python_scanner/file.rs
+    286 lines  report/python.rs
+    241 lines  types.rs
+    240 lines  report/mod.rs
+    225 lines  rust_scanner/visitors.rs
+    193 lines  graph.rs
+    179 lines  audits.rs
+    107 lines  scanner.rs
+     23 lines  ts_checks.rs
+
+  Top 20 Largest Functions
+  ------------------------------------------------------------
+    250 lines  build_json  [ts_scanner/mod.rs:188]
+    156 lines  build_json  [python_scanner/mod.rs:202]
+    132 lines  build_json  [rust_scanner/mod.rs:271]
+    112 lines  analyze_ts_file  [ts_scanner/file.rs:612]
+    101 lines  collect_and_aggregate  [python_scanner/mod.rs:100]
+     96 lines  collect_rust_audits  [rust_scanner/mod.rs:174]
+     86 lines  for_each_child_expr  [python_scanner/visitors.rs:95]
+     85 lines  record_use_tree  [rust_scanner/file.rs:169]
+     79 lines  build_scanner_runs  [main.rs:379]
+     76 lines  analyze_rs_file  [rust_scanner/file.rs:525]
+     67 lines  print_ts_report  [report/typescript.rs:445]
+     65 lines  for_each_expr_in_stmt  [python_scanner/visitors.rs:260]
+     60 lines  emit_output  [main.rs:493]
+     56 lines  section_hooks  [report/typescript.rs:215]
+     56 lines  mobx_check_exported_vars  [ts_scanner/file.rs:427]
+     55 lines  complexity_expr  [python_scanner/visitors.rs:440]
+     52 lines  complexity_stmt  [python_scanner/visitors.rs:367]
+     51 lines  check_thresholds  [main.rs:327]
+     51 lines  print_rust_report  [report/rust_report.rs:298]
+     50 lines  detect_modes  [main.rs:142]
+
+  Top 20 Largest Structs / Enums
+  ------------------------------------------------------------
+     71 lines  Cli (struct)  0 methods  [main.rs:42]
+     18 lines  RsFileData (struct)  0 methods  [types.rs:223]
+     16 lines  RsFuncInfo (struct)  0 methods  [types.rs:172]
+     15 lines  PyCollectedData (struct)  0 methods  [python_scanner/mod.rs:84]
+     15 lines  TsFileData (struct)  0 methods  [types.rs:83]
+     13 lines  FileAnalyzer (struct)  5 methods  [python_scanner/file.rs:56]
+     13 lines  RsItemCtx (struct)  0 methods  [rust_scanner/file.rs:340]
+     13 lines  TsFuncInfo (struct)  0 methods  [types.rs:45]
+     13 lines  PyFileData (struct)  0 methods  [types.rs:117]
+     12 lines  PyFuncInfo (struct)  0 methods  [types.rs:8]
+     12 lines  RsStructInfo (struct)  0 methods  [types.rs:190]
+     11 lines  FileCtx (struct)  0 methods  [ts_scanner/file.rs:552]
+     10 lines  TsClassInfo (struct)  0 methods  [types.rs:60]
+      9 lines  PyClassInfo (struct)  0 methods  [types.rs:22]
+      9 lines  TsImportInfo (struct)  0 methods  [types.rs:72]
+      9 lines  RsImportInfo (struct)  0 methods  [types.rs:212]
+      8 lines  RsFnSpec (struct)  0 methods  [rust_scanner/file.rs:294]
+      8 lines  RouteInfo (struct)  0 methods  [types.rs:33]
+      7 lines  PyFileScanItem (enum)  0 methods  [python_scanner/file.rs:234]
+      7 lines  OrmVisitor (struct)  2 methods  [ts_scanner/visitors.rs:367]
+
+========================================================================
+  2. CYCLOMATIC COMPLEXITY — Top 30
+========================================================================
+  CC= 37  for_each_child_expr  [python_scanner/visitors.rs:95]
+  CC= 25  for_each_expr_in_stmt  [python_scanner/visitors.rs:260]
+  CC= 21  analyze_ts_file  [ts_scanner/file.rs:612]
+  CC= 19  print_ts_report  [report/typescript.rs:445]
+  CC= 18  process_item  [rust_scanner/file.rs:474]
+  CC= 17  complexity_expr  [python_scanner/visitors.rs:440]
+  CC= 17  item_attrs  [rust_scanner/file.rs:108]
+  CC= 16  detect_modes  [main.rs:142]
+  CC= 16  record_use_tree  [rust_scanner/file.rs:169]
+  CC= 15  collect_and_aggregate  [python_scanner/mod.rs:100]
+  CC= 15  for_each_child_stmt  [python_scanner/visitors.rs:206]
+  CC= 15  print_rust_report  [report/rust_report.rs:298]
+  CC= 14  emit_output  [main.rs:493]
+  CC= 14  collect_all_export_strings  [python_scanner/file.rs:23]
+  CC= 13  FileAnalyzer::visit_module (method)  [python_scanner/file.rs:195]
+  CC= 13  complexity_stmt  [python_scanner/visitors.rs:367]
+  CC= 13  process_export_named  [ts_scanner/file.rs:564]
+  CC= 12  build_scanner_runs  [main.rs:379]
+  CC= 12  print_python_report  [report/python.rs:243]
+  CC= 12  collect_rs_files  [rust_scanner/file.rs:50]
+  CC= 12  collect_ts_files  [ts_scanner/file.rs:120]
+  CC= 12  mobx_check_exported_vars  [ts_scanner/file.rs:427]
+  CC= 11  check_thresholds  [main.rs:327]
+  CC= 11  collect_py_files  [python_scanner/mod.rs:57]
+  CC= 11  analyze_rs_file  [rust_scanner/file.rs:525]
+  CC= 11  extract_props_from_params  [ts_scanner/file.rs:168]
+  CC= 11  build_json  [ts_scanner/mod.rs:188]
+  CC= 10  collect_mobx_issues  [ts_scanner/file.rs:372]
+  CC=  9  collect_eslint_disables  [audits.rs:69]
+  CC=  9  classify_extension  [main.rs:125]
+
+========================================================================
+  2b. NESTING DEPTH — Top 30
+========================================================================
+  depth= 6  OrmVisitor::visit_call_expression (method)  [ts_scanner/visitors.rs:397]
+  depth= 5  FileAnalyzer::visit_module (method)  [python_scanner/file.rs:195]
+  depth= 5  collect_and_aggregate  [python_scanner/mod.rs:100]
+  depth= 5  process_impl_item  [rust_scanner/file.rs:434]
+  depth= 5  process_variable_decl  [ts_scanner/file.rs:532]
+  depth= 5  check_boundaries  [ts_scanner/file.rs:725]
+  depth= 4  find_cycles  [graph.rs:8]
+  depth= 4  check_thresholds  [main.rs:327]
+  depth= 4  collect_all_export_strings  [python_scanner/file.rs:23]
+  depth= 4  collect_py_files  [python_scanner/mod.rs:57]
+  depth= 4  check_silent_handler  [python_scanner/visitors.rs:699]
+  depth= 4  section_nesting  [report/python.rs:101]
+  depth= 4  section_nesting  [report/rust_report.rs:128]
+  depth= 4  section_inventory  [report/typescript.rs:49]
+  depth= 4  section_orm_case_check  [report/typescript.rs:389]
+  depth= 4  section_import_boundaries  [report/typescript.rs:419]
+  depth= 4  collect_rs_files  [rust_scanner/file.rs:50]
+  depth= 4  collect_derives  [rust_scanner/visitors.rs:209]
+  depth= 4  collect_ts_files  [ts_scanner/file.rs:120]
+  depth= 4  extract_props_from_params  [ts_scanner/file.rs:168]
+  depth= 4  mobx_check_exported_vars  [ts_scanner/file.rs:427]
+  depth= 4  process_class_declaration  [ts_scanner/file.rs:484]
+  depth= 4  analyze_ts_file  [ts_scanner/file.rs:612]
+  depth= 4  SilentCatchCollector::visit_call_expression (method)  [ts_scanner/visitors.rs:289]
+  depth= 3  collect_todo_comments  [audits.rs:47]
+  depth= 3  collect_eslint_disables  [audits.rs:69]
+  depth= 3  classify_extension  [main.rs:125]
+  depth= 3  build_scanner_runs  [main.rs:379]
+  depth= 3  emit_output  [main.rs:493]
+  depth= 3  build_json  [python_scanner/mod.rs:202]
+
+========================================================================
+  3. IMPORT DEPENDENCY GRAPH (crate-internal)
+========================================================================
+  Internal modules:      19
+  Internal import edges: 111
+
+  Top 20 Most-Imported Internal Modules
+  ------------------------------------------------------------
+     3x  report/print_counted_list
+     3x  report/section_header
+     3x  report/print_cycles
+     3x  graph/unique_cycles
+     3x  report/print_dead_exports
+     3x  graph/find_cycles
+     3x  report/has_todo_markers
+     3x  report/print_coupling_table
+     3x  report/print_todo_audit_body
+     3x  audits/collect_todo_comments
+     3x  report/print_import_top_modules
+     3x  report/sep
+     3x  graph/compute_coupling
+     3x  report/print_files_by_lines
+     2x  types/RouteInfo
+     2x  report/fmt_grouped_u64
+     2x  report/print_parse_errors_body
+     2x  types/RsFileData
+     2x  report/sub_header
+     2x  types/BoundaryRule
+
+  Top 15 External Crates
+  ------------------------------------------------------------
+    40x  std
+    22x  syn
+    19x  rustpython_parser
+    11x  serde_json
+     6x  anyhow
+     5x  scanner
+     3x  oxc_ast
+     3x  rayon
+     2x  oxc_ast_visit
+     2x  regex
+     2x  oxc_span
+     1x  walkdir
+     1x  python
+     1x  oxc_parser
+     1x  proc_macro2
+
+========================================================================
+  3b. MODULE COUPLING — Top 20
+========================================================================
+  MODULE                                     Ca   Ce     I
+  ------------------------------------------------------------
+  ts_scanner/file                             0   20  1.00
+  python_scanner/file                         0   16  1.00
+  rust_scanner/file                           0   16  1.00
+  report/rust_report                          0   14  1.00
+  report/typescript                           0   13  1.00
+  report/python                               0   12  1.00
+  ts_scanner                                  2    7  0.78
+  rust_scanner                                1    5  0.83
+  python_scanner                              0    3  1.00
+  python_scanner/visitors                     0    2  1.00
+  scanner                                     0    2  1.00
+  report                                      1    0  0.00
+  ts_checks                                   0    1  1.00
+
+========================================================================
+  4. CIRCULAR IMPORTS
+========================================================================
+  None found.
+
+========================================================================
+  5. DEAD EXPORTS (pub, never imported internally by name)
+========================================================================
+  None found.
+
+========================================================================
+  6. UNSAFE AUDIT
+========================================================================
+  Unsafe functions: 0
+  Unsafe blocks:    0
+
+
+========================================================================
+  7. UNWRAP / EXPECT AUDIT
+========================================================================
+  Total .unwrap() / .expect() sites: 13
+
+     4x  ts_scanner/file.rs
+     3x  audits.rs
+     3x  graph.rs
+     1x  main.rs
+     1x  ts_scanner/mod.rs
+     1x  ts_scanner/visitors.rs
+
+========================================================================
+  8. #[allow(...)] LINT AUDIT
+========================================================================
+  1 allow attribute(s):
+
+     1x  clippy::only_used_in_recursion
+
+========================================================================
+  9. DERIVE MACRO AUDIT
+========================================================================
+  134 derive use(s):
+
+    46x  Debug
+    44x  Clone
+    34x  Serialize
+     2x  Eq
+     2x  Default
+     2x  PartialEq
+     2x  Copy
+     2x  Parser
+
+========================================================================
+  10. TRAIT INVENTORY
+========================================================================
+  Scanner  [scanner.rs:38]  pub(crate)
+
+========================================================================
+  END OF REPORT
+========================================================================
