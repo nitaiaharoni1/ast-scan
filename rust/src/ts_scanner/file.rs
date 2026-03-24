@@ -10,15 +10,16 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 
 use crate::types::{
-    BoundaryRule, BoundaryViolation, MobxObserverInfo, TsClassInfo, TsFileData, TsFuncInfo,
-    TsImportInfo,
+    BoundaryRule, BoundaryViolation, MobxObserverInfo, TsClassInfo, TsFileData,
+    TsFuncInfo, TsImportInfo,
 };
 
 use super::visitors::{
-    body_contains_jsx, collect_console_debugger, collect_hooks_in_body, collect_hooks_in_expr,
-    collect_orm_case_findings, collect_silent_catches, complexity_expression,
-    complexity_function_body, count_any_in_program, expr_contains_jsx, nesting_expression,
-    nesting_function_body,
+    body_contains_jsx, cognitive_expression, cognitive_function_body, collect_console_debugger,
+    collect_hooks_in_body, collect_hooks_in_expr, collect_orm_case_findings, collect_silent_catches,
+    collect_ts_security, complexity_expression, complexity_function_body, count_any_in_program,
+    count_ts_formal_params, expr_contains_jsx, nesting_expression, nesting_function_body,
+    ts_expression_shape_hash, ts_function_body_shape_hash,
 };
 
 pub(crate) fn display_rel(abs: &Path, scan_root: &Path) -> String {
@@ -115,6 +116,19 @@ fn matches_exclude(filepath: &Path, scan_root: &Path, patterns: &[String]) -> bo
     patterns
         .iter()
         .any(|pat| rel.contains(pat) || rel.starts_with(pat))
+}
+
+fn is_ts_test_path(rel: &str) -> bool {
+    let r = rel.replace('\\', "/").to_ascii_lowercase();
+    r.contains("/__tests__/")
+        || r.contains(".test.")
+        || r.contains(".spec.")
+        || r.contains(".cy.")
+        || r.contains(".jest.")
+        || r.ends_with("_test.ts")
+        || r.ends_with("_test.tsx")
+        || r.ends_with("_test.js")
+        || r.ends_with("_test.jsx")
 }
 
 pub(crate) fn collect_ts_files(scan_root: &Path, exclude: &[String]) -> Vec<PathBuf> {
@@ -285,6 +299,7 @@ struct TsFuncScanState<'a> {
     file: &'a str,
     source: &'a str,
     is_tsx: bool,
+    is_test_file: bool,
 }
 
 fn process_function<'a>(
@@ -300,6 +315,9 @@ fn process_function<'a>(
     let start = line_at(st.source, func.span.start);
     let end = line_at(st.source, func.span.end);
     let (cc, nest, jsx, hooks) = body_metrics_jsx_hooks_function(body);
+    let cognitive_complexity = cognitive_function_body(body);
+    let param_count = count_ts_formal_params(&func.params);
+    let clone_hash = ts_function_body_shape_hash(body);
     let is_comp = st.is_tsx && is_component_name(&name) && jsx;
     let props = if is_comp {
         extract_props_function(func)
@@ -314,11 +332,15 @@ fn process_function<'a>(
         end_line: end,
         line_count: end.saturating_sub(start) + 1,
         complexity: cc,
+        cognitive_complexity,
         nesting: nest,
+        param_count,
+        clone_hash,
         exported,
         is_component: is_comp,
         props,
         hooks,
+        is_test: st.is_test_file,
     });
     if exported {
         exports.push(name);
@@ -335,6 +357,23 @@ fn process_arrow_var<'a>(
     let start = line_at(st.source, arr.span.start);
     let end = line_at(st.source, arr.span.end);
     let (cc, nest, jsx, hooks) = body_metrics_jsx_hooks_arrow(arr);
+    let (cognitive_complexity, clone_hash, param_count) = if arr.expression {
+        if let Some(expr) = arr.get_expression() {
+            (
+                cognitive_expression(expr),
+                ts_expression_shape_hash(expr),
+                count_ts_formal_params(&arr.params),
+            )
+        } else {
+            (0, 0, count_ts_formal_params(&arr.params))
+        }
+    } else {
+        (
+            cognitive_function_body(&arr.body),
+            ts_function_body_shape_hash(&arr.body),
+            count_ts_formal_params(&arr.params),
+        )
+    };
     let is_comp = st.is_tsx && is_component_name(&name) && jsx;
     let props = if is_comp {
         extract_props_arrow(arr)
@@ -349,11 +388,15 @@ fn process_arrow_var<'a>(
         end_line: end,
         line_count: end.saturating_sub(start) + 1,
         complexity: cc,
+        cognitive_complexity,
         nesting: nest,
+        param_count,
+        clone_hash,
         exported,
         is_component: is_comp,
         props,
         hooks,
+        is_test: st.is_test_file,
     });
     if exported {
         exports.push(name);
@@ -639,12 +682,14 @@ pub(crate) fn analyze_ts_file(
     let mut classes = Vec::new();
     let mut imports = Vec::new();
     let mut exports = Vec::new();
+    let is_test_file = is_ts_test_path(&rel);
 
     let mut ts_st = TsFuncScanState {
         functions: &mut functions,
         file: rel.as_str(),
         source: file_src,
         is_tsx,
+        is_test_file,
     };
 
     for stmt in &program.body {
@@ -705,6 +750,9 @@ pub(crate) fn analyze_ts_file(
         vec![]
     };
 
+    let mut security_findings = Vec::new();
+    collect_ts_security(program, &rel, file_src, &mut security_findings);
+
     Some(TsFileData {
         rel_path: rel,
         abs_path: abs.display().to_string(),
@@ -719,6 +767,8 @@ pub(crate) fn analyze_ts_file(
         silent_catches,
         mobx_observer_issues,
         orm_case_issues,
+        security_findings,
+        is_test_file,
     })
 }
 

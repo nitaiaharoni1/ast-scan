@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 use syn::spanned::Spanned;
 use syn::{Attribute, Block, Expr, ImplItem, Item, Signature, Type, UseTree, Visibility};
 
-use crate::types::{RsFileData, RsFuncInfo, RsImportInfo, RsStructInfo, RsTraitInfo};
+use crate::types::{RsFileData, RsFuncInfo, RsImportInfo, RsStructInfo, RsTraitInfo, SecurityFinding};
 
 use super::visitors::{
-    collect_allow_lints, collect_derives, complexity_block, count_unsafe_blocks, count_unsafe_expr,
-    count_unwrap_expect_expr, count_unwrap_expect_in_block, nesting_block, span_end_line,
-    span_line,
+    collect_allow_lints, collect_derives, collect_rust_security_block, collect_rust_security_expr,
+    cognitive_block, complexity_block, count_rust_params, count_unsafe_blocks, count_unsafe_expr,
+    count_unwrap_expect_expr, count_unwrap_expect_in_block, nesting_block, rust_block_shape_hash,
+    span_end_line, span_line,
 };
 
 pub(crate) fn display_rel(abs: &Path, scan_root: &Path) -> String {
@@ -79,6 +80,14 @@ pub(crate) fn collect_rs_files(scan_root: &Path, exclude: &[String]) -> Vec<Path
 }
 
 /// Module id from repo-relative path: `src/foo/bar.rs` -> `foo/bar`, `foo/mod.rs` -> `foo`.
+fn is_rust_test_path(rel: &str) -> bool {
+    let r = rel.replace('\\', "/").to_ascii_lowercase();
+    r.contains("/tests/")
+        || r.starts_with("tests/")
+        || r.ends_with("_test.rs")
+        || r.contains("/test_")
+}
+
 pub(crate) fn rust_file_to_module(rel: &str) -> String {
     let p = rel.replace('\\', "/");
     let p = p.strip_suffix(".rs").unwrap_or(&p);
@@ -300,7 +309,7 @@ struct RsFnSpec<'a> {
     is_method: bool,
 }
 
-fn push_fn(out: &mut Vec<RsFuncInfo>, spec: RsFnSpec<'_>) {
+fn push_fn(ctx: &mut RsItemCtx<'_>, spec: RsFnSpec<'_>) {
     let line = span_line(spec.sig.fn_token.span);
     let end_line = spec
         .block
@@ -312,6 +321,18 @@ fn push_fn(out: &mut Vec<RsFuncInfo>, spec: RsFnSpec<'_>) {
     } else {
         (1usize, 0usize)
     };
+    let cognitive_complexity = spec
+        .block
+        .map(cognitive_block)
+        .unwrap_or(0);
+    let clone_hash = spec
+        .block
+        .map(rust_block_shape_hash)
+        .unwrap_or(0);
+    let param_count = count_rust_params(spec.sig, spec.is_method);
+    if let Some(b) = spec.block {
+        collect_rust_security_block(b, spec.file, ctx.security_findings);
+    }
     let name = spec.sig.ident.to_string();
     let qualname = match &spec.parent_type {
         Some(p) => format!("{p}::{name}"),
@@ -320,7 +341,7 @@ fn push_fn(out: &mut Vec<RsFuncInfo>, spec: RsFnSpec<'_>) {
     let vis = vis_string(spec.vis);
     let is_unsafe = spec.sig.unsafety.is_some();
     let is_async = spec.sig.asyncness.is_some();
-    out.push(RsFuncInfo {
+    ctx.functions.push(RsFuncInfo {
         name,
         qualname,
         file: spec.file.to_string(),
@@ -328,12 +349,16 @@ fn push_fn(out: &mut Vec<RsFuncInfo>, spec: RsFnSpec<'_>) {
         end_line,
         line_count,
         complexity: cc,
+        cognitive_complexity,
         nesting: nest,
+        param_count,
+        clone_hash,
         is_method: spec.is_method,
         is_unsafe,
         is_async,
         visibility: vis,
         parent_type: spec.parent_type,
+        is_test: ctx.is_test_file,
     });
 }
 
@@ -349,6 +374,8 @@ struct RsItemCtx<'a> {
     derive_hits: &'a mut HashMap<String, usize>,
     unsafe_blocks: &'a mut usize,
     unwrap_expect: &'a mut usize,
+    security_findings: &'a mut Vec<SecurityFinding>,
+    is_test_file: bool,
 }
 
 fn process_fn_item(ctx: &mut RsItemCtx<'_>, f: &syn::ItemFn) {
@@ -359,7 +386,7 @@ fn process_fn_item(ctx: &mut RsItemCtx<'_>, f: &syn::ItemFn) {
     *ctx.unsafe_blocks += count_unsafe_blocks(body);
     *ctx.unwrap_expect += count_unwrap_expect_in_block(body);
     push_fn(
-        ctx.functions,
+        ctx,
         RsFnSpec {
             sig: &f.sig,
             vis: &f.vis,
@@ -446,7 +473,7 @@ fn process_impl_item(ctx: &mut RsItemCtx<'_>, i: &syn::ItemImpl) {
                     }
                 }
                 push_fn(
-                    ctx.functions,
+                    ctx,
                     RsFnSpec {
                         sig: &m.sig,
                         vis: &m.vis,
@@ -462,6 +489,7 @@ fn process_impl_item(ctx: &mut RsItemCtx<'_>, i: &syn::ItemImpl) {
 }
 
 fn process_expr_audits(ctx: &mut RsItemCtx<'_>, expr: &Expr) {
+    collect_rust_security_expr(expr, ctx.rel_file, ctx.security_findings);
     if let Expr::Block(eb) = expr {
         *ctx.unsafe_blocks += count_unsafe_blocks(&eb.block);
         *ctx.unwrap_expect += count_unwrap_expect_in_block(&eb.block);
@@ -555,6 +583,8 @@ pub(crate) fn analyze_rs_file(
     let mut derive_hits = HashMap::new();
     let mut unsafe_blocks = 0usize;
     let mut unwrap_expect = 0usize;
+    let mut security_findings = Vec::new();
+    let is_test_file = is_rust_test_path(&rel);
 
     let mut ctx = RsItemCtx {
         current_mod: current_mod.as_str(),
@@ -568,6 +598,8 @@ pub(crate) fn analyze_rs_file(
         derive_hits: &mut derive_hits,
         unsafe_blocks: &mut unsafe_blocks,
         unwrap_expect: &mut unwrap_expect,
+        security_findings: &mut security_findings,
+        is_test_file,
     };
     for item in &ast.items {
         process_item(&mut ctx, item);
@@ -596,6 +628,8 @@ pub(crate) fn analyze_rs_file(
         unwrap_expect_count: unwrap_expect,
         allow_lint_hits: allow_lints,
         derive_hits,
+        security_findings,
+        is_test_file,
     }))
 }
 

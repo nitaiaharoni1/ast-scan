@@ -3,13 +3,14 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use super::{
-    fmt_grouped_u64, has_parse_errors, has_todo_markers, print_counted_list,
-    print_coupling_table, print_cycles, print_dead_exports, print_files_by_lines,
-    print_import_top_modules, print_parse_errors_body, print_todo_audit_body, section_header,
+    fmt_grouped_u64, has_parse_errors, has_todo_markers, print_code_clones_section,
+    print_cognitive_section, print_counted_list, print_coupling_table, print_cycles,
+    print_dead_exports, print_files_by_lines, print_import_top_modules, print_parse_errors_body,
+    print_security_audit_section, print_test_prod_lines, print_todo_audit_body, section_header,
     sep, sub_header,
 };
 
-fn section_summary(data: &Value, title: &str) {
+fn section_summary(data: &Value, title: &str, skip: &HashSet<String>) {
     let s = &data["summary"];
     sep();
     println!("  {title}");
@@ -49,7 +50,15 @@ fn section_summary(data: &Value, title: &str) {
             s["parse_errors"].as_u64().unwrap_or(0)
         );
     }
-    println!();
+    if !skip.contains("test-prod") {
+        if let Some(tp) = s.get("test_prod") {
+            print_test_prod_lines(tp);
+        } else {
+            println!();
+        }
+    } else {
+        println!();
+    }
 }
 
 fn section_inventory(data: &Value, top: usize) {
@@ -297,13 +306,16 @@ fn section_parse_errors(data: &Value) {
 /// Rust crate text report.
 pub(crate) fn print_rust_report(data: &Value, title: &str, top: usize, skip: &HashSet<String>) {
     let cc_top = top.max(30);
-    section_summary(data, title);
+    section_summary(data, title, skip);
 
     if !skip.contains("inventory") {
         section_inventory(data, top);
     }
     if !skip.contains("complexity") {
         section_complexity(data, cc_top);
+    }
+    if !skip.contains("cognitive") {
+        print_cognitive_section(data, cc_top, "(Rust)");
     }
     if !skip.contains("nesting") {
         section_nesting(data, top);
@@ -316,6 +328,9 @@ pub(crate) fn print_rust_report(data: &Value, title: &str, top: usize, skip: &Ha
     }
     if !skip.contains("cycles") {
         section_cycles(data);
+    }
+    if !skip.contains("code-clones") {
+        print_code_clones_section(data, top);
     }
     if !skip.contains("dead-exports") {
         section_dead_exports(data, top);
@@ -337,6 +352,9 @@ pub(crate) fn print_rust_report(data: &Value, title: &str, top: usize, skip: &Ha
     }
     if !skip.contains("todo-audit") {
         section_todo_audit(data);
+    }
+    if !skip.contains("security-audit") {
+        print_security_audit_section(data, 50);
     }
     if !skip.contains("parse-errors") {
         section_parse_errors(data);

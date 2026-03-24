@@ -9,6 +9,10 @@ use oxc_ast_visit::Visit;
 use oxc_span::GetSpan;
 use regex::Regex;
 
+use crate::clones;
+use crate::secrets;
+use crate::types::SecurityFinding;
+
 /// Cyclomatic-style complexity (base 1 + decision points), aligned with the historical TS scanner.
 pub(crate) struct ComplexityVisitor {
     pub cc: usize,
@@ -349,6 +353,209 @@ pub(crate) fn collect_silent_catches<'a>(
     };
     walk::walk_program(&mut v, program);
     v.out
+}
+
+// ---------------------------------------------------------------------------
+// Cognitive complexity (nesting-weighted decisions)
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+pub(crate) struct CognitiveTsVisitor {
+    pub score: usize,
+    depth: usize,
+}
+
+impl<'a> Visit<'a> for CognitiveTsVisitor {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        match kind {
+            AstKind::IfStatement(_)
+            | AstKind::ForStatement(_)
+            | AstKind::ForInStatement(_)
+            | AstKind::ForOfStatement(_)
+            | AstKind::WhileStatement(_)
+            | AstKind::DoWhileStatement(_) => {
+                self.score += 1 + self.depth;
+                self.depth += 1;
+            }
+            AstKind::TryStatement(_) | AstKind::CatchClause(_) => {
+                self.score += 1 + self.depth;
+                self.depth += 1;
+            }
+            AstKind::SwitchStatement(_) => {
+                self.depth += 1;
+            }
+            AstKind::SwitchCase(sc) => {
+                if sc.test.is_some() {
+                    self.score += 1 + self.depth;
+                }
+            }
+            AstKind::ConditionalExpression(_) => {
+                self.score += 1 + self.depth;
+                self.depth += 1;
+            }
+            AstKind::LogicalExpression(_) => {
+                self.score += 1 + self.depth;
+            }
+            _ => {}
+        }
+    }
+
+    fn leave_node(&mut self, kind: AstKind<'a>) {
+        match kind {
+            AstKind::IfStatement(_)
+            | AstKind::ForStatement(_)
+            | AstKind::ForInStatement(_)
+            | AstKind::ForOfStatement(_)
+            | AstKind::WhileStatement(_)
+            | AstKind::DoWhileStatement(_)
+            | AstKind::TryStatement(_)
+            | AstKind::CatchClause(_) => {
+                self.depth = self.depth.saturating_sub(1);
+            }
+            AstKind::SwitchStatement(_) => {
+                self.depth = self.depth.saturating_sub(1);
+            }
+            AstKind::ConditionalExpression(_) => {
+                self.depth = self.depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn cognitive_function_body<'a>(body: &FunctionBody<'a>) -> usize {
+    let mut v = CognitiveTsVisitor::default();
+    walk::walk_function_body(&mut v, body);
+    v.score
+}
+
+pub(crate) fn cognitive_expression<'a>(expr: &Expression<'a>) -> usize {
+    let mut v = CognitiveTsVisitor::default();
+    walk::walk_expression(&mut v, expr);
+    v.score
+}
+
+pub(crate) fn count_ts_formal_params<'a>(params: &FormalParameters<'a>) -> usize {
+    let n = params.items.len();
+    if let Some(first) = params.items.first() {
+        if binding_pattern_is_this(&first.pattern) {
+            return n.saturating_sub(1);
+        }
+    }
+    n
+}
+
+fn binding_pattern_is_this(pat: &BindingPattern<'_>) -> bool {
+    matches!(
+        pat,
+        BindingPattern::BindingIdentifier(id) if id.name.as_str() == "this"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Structural shape hash (clone detection)
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+pub(crate) struct TsShapeVisitor {
+    pub buf: String,
+}
+
+impl<'a> Visit<'a> for TsShapeVisitor {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        let tag = match kind {
+            AstKind::IfStatement(_) => "IF|",
+            AstKind::ForStatement(_) | AstKind::ForInStatement(_) | AstKind::ForOfStatement(_) => {
+                "FOR|"
+            }
+            AstKind::WhileStatement(_) | AstKind::DoWhileStatement(_) => "WHILE|",
+            AstKind::ReturnStatement(_) => "RET|",
+            AstKind::TryStatement(_) => "TRY|",
+            AstKind::CatchClause(_) => "CATCH|",
+            AstKind::SwitchStatement(_) => "SW|",
+            AstKind::SwitchCase(_) => "CASE|",
+            AstKind::BreakStatement(_) => "BRK|",
+            AstKind::ContinueStatement(_) => "CONT|",
+            AstKind::ThrowStatement(_) => "THROW|",
+            AstKind::VariableDeclaration(_) => "VAR|",
+            AstKind::ExpressionStatement(_) => "EXPRSTMT|",
+            AstKind::StringLiteral(_) => "STR|",
+            AstKind::NumericLiteral(_) => "NUM|",
+            AstKind::BooleanLiteral(_) => "BOOL|",
+            AstKind::NullLiteral(_) => "NULL|",
+            AstKind::IdentifierReference(_) => "ID|",
+            AstKind::CallExpression(_) => "CALL|",
+            AstKind::StaticMemberExpression(_) => "MEM|",
+            AstKind::ComputedMemberExpression(_) => "CMEM|",
+            AstKind::LogicalExpression(_) => "LOG|",
+            AstKind::ConditionalExpression(_) => "COND|",
+            AstKind::ObjectExpression(_) => "OBJ|",
+            AstKind::ArrayExpression(_) => "ARR|",
+            AstKind::AssignmentExpression(_) => "ASSIGN|",
+            AstKind::UpdateExpression(_) => "UPD|",
+            AstKind::AwaitExpression(_) => "AWAIT|",
+            AstKind::YieldExpression(_) => "YIELD|",
+            AstKind::UnaryExpression(_) => "UNARY|",
+            AstKind::BinaryExpression(_) => "BIN|",
+            AstKind::TemplateLiteral(_) => "TPL|",
+            AstKind::ArrowFunctionExpression(_) => "ARROW|",
+            _ => "",
+        };
+        if !tag.is_empty() {
+            self.buf.push_str(tag);
+        }
+    }
+}
+
+pub(crate) fn ts_function_body_shape_hash<'a>(body: &FunctionBody<'a>) -> u64 {
+    let mut v = TsShapeVisitor::default();
+    walk::walk_function_body(&mut v, body);
+    clones::hash_shape(&v.buf)
+}
+
+pub(crate) fn ts_expression_shape_hash<'a>(expr: &Expression<'a>) -> u64 {
+    let mut v = TsShapeVisitor::default();
+    walk::walk_expression(&mut v, expr);
+    clones::hash_shape(&v.buf)
+}
+
+// ---------------------------------------------------------------------------
+// Secret scan: string literals in module
+// ---------------------------------------------------------------------------
+
+struct TsSecurityVisitor<'s> {
+    rel: &'s str,
+    source: &'s str,
+    out: &'s mut Vec<SecurityFinding>,
+}
+
+impl<'a, 's> Visit<'a> for TsSecurityVisitor<'s> {
+    fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
+        let line = line_at(self.source, it.span.start);
+        if let Some(f) = secrets::audit_string_literal(
+            it.value.as_str(),
+            self.rel,
+            line,
+            "literal",
+        ) {
+            self.out.push(f);
+        }
+        walk::walk_string_literal(self, it);
+    }
+}
+
+pub(crate) fn collect_ts_security<'a>(
+    program: &Program<'a>,
+    rel: &str,
+    source: &str,
+    out: &mut Vec<SecurityFinding>,
+) {
+    let mut v = TsSecurityVisitor {
+        rel,
+        source,
+        out,
+    };
+    walk::walk_program(&mut v, program);
 }
 
 static ORM_IGNORE: &[&str] = &[

@@ -36,6 +36,10 @@ pub(crate) fn rs_text_skip_sections() -> HashSet<&'static str> {
         "todo-audit",
         "traits",
         "parse-errors",
+        "cognitive",
+        "code-clones",
+        "security-audit",
+        "test-prod",
     ]
     .into_iter()
     .collect()
@@ -268,6 +272,34 @@ fn collect_rust_audits(all_data: &[RsFileData]) -> Value {
     })
 }
 
+const CLONE_MIN_LINES_RS: usize = 10;
+
+fn build_code_clones_rs(funcs: &[crate::types::RsFuncInfo]) -> Vec<Value> {
+    let mut m: HashMap<u64, Vec<&crate::types::RsFuncInfo>> = HashMap::new();
+    for f in funcs {
+        if f.line_count > CLONE_MIN_LINES_RS {
+            m.entry(f.clone_hash).or_default().push(f);
+        }
+    }
+    let mut groups: Vec<_> = m.into_iter().filter(|(_, v)| v.len() > 1).collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    groups
+        .into_iter()
+        .map(|(h, vs)| {
+            json!({
+                "hash": format!("{h:016x}"),
+                "count": vs.len(),
+                "functions": vs.iter().map(|f| json!({
+                    "name": f.qualname,
+                    "file": f.file,
+                    "line": f.line,
+                    "lines": f.line_count,
+                })).collect::<Vec<_>>()
+            })
+        })
+        .collect()
+}
+
 fn build_json(
     all_data: &[RsFileData],
     parse_errors: Vec<Value>,
@@ -300,11 +332,78 @@ fn build_json(
     let cycles_unique = unique_cycles(&raw_cycles);
     let cycles_str: Vec<String> = cycles_unique.iter().map(|c| c.join(" -> ")).collect();
 
+    let test_lines: usize = all_data
+        .iter()
+        .filter(|d| d.is_test_file)
+        .map(|d| d.line_count)
+        .sum();
+    let prod_lines: usize = all_data
+        .iter()
+        .filter(|d| !d.is_test_file)
+        .map(|d| d.line_count)
+        .sum();
+    let test_functions = all_functions.iter().filter(|f| f.is_test).count();
+    let prod_functions = all_functions.len() - test_functions;
+    let line_total_tp = test_lines + prod_lines;
+    let line_ratio_test = if line_total_tp > 0 {
+        test_lines as f64 / line_total_tp as f64
+    } else {
+        0.0
+    };
+    let fn_total_tp = test_functions + prod_functions;
+    let fn_ratio_test = if fn_total_tp > 0 {
+        test_functions as f64 / fn_total_tp as f64
+    } else {
+        0.0
+    };
+
+    let mut all_security: Vec<_> = all_data
+        .iter()
+        .flat_map(|d| d.security_findings.iter().cloned())
+        .collect();
+    all_security.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
+
+    let code_clones = build_code_clones_rs(&all_functions);
+
     let mut complexity_rows: Vec<Value> = all_functions
         .iter()
-        .map(|f| json!({"name": f.qualname, "cc": f.complexity, "nesting": f.nesting, "file": f.file, "line": f.line, "is_method": f.is_method, "is_unsafe": f.is_unsafe}))
+        .map(|f| json!({
+            "name": f.qualname,
+            "cc": f.complexity,
+            "cognitive": f.cognitive_complexity,
+            "params": f.param_count,
+            "nesting": f.nesting,
+            "file": f.file,
+            "line": f.line,
+            "is_method": f.is_method,
+            "is_unsafe": f.is_unsafe,
+            "is_test": f.is_test,
+        }))
         .collect();
     complexity_rows.sort_by(|a, b| b["cc"].as_u64().unwrap_or(0).cmp(&a["cc"].as_u64().unwrap_or(0)).then_with(|| a["name"].as_str().cmp(&b["name"].as_str())));
+
+    let mut cognitive_rows: Vec<Value> = all_functions
+        .iter()
+        .map(|f| json!({
+            "name": f.qualname,
+            "cognitive": f.cognitive_complexity,
+            "file": f.file,
+            "line": f.line,
+            "is_method": f.is_method,
+        }))
+        .collect();
+    cognitive_rows.sort_by(|a, b| {
+        b["cognitive"]
+            .as_u64()
+            .unwrap_or(0)
+            .cmp(&a["cognitive"].as_u64().unwrap_or(0))
+            .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+    });
 
     let mut nesting_rows: Vec<Value> = all_functions
         .iter()
@@ -367,6 +466,14 @@ fn build_json(
             "internal_imports": internal_imports,
             "external_imports": external_imports,
             "parse_errors": parse_errors.len(),
+            "test_prod": {
+                "test_lines": test_lines,
+                "production_lines": prod_lines,
+                "test_functions": test_functions,
+                "production_functions": prod_functions,
+                "line_ratio_test": line_ratio_test,
+                "function_ratio_test": fn_ratio_test,
+            },
         },
         "parse_errors": parse_errors,
         "inventory": {
@@ -375,7 +482,13 @@ fn build_json(
             "largest_types": largest_types,
         },
         "complexity": complexity_rows,
+        "cognitive": cognitive_rows,
         "nesting": nesting_rows,
+        "code_clones": code_clones,
+        "security_audit": {
+            "total": all_security.len(),
+            "findings": serde_json::to_value(&all_security).unwrap_or(Value::Null),
+        },
         "imports": {
             "modules": ig.all_modules.len(),
             "edges": total_edges,

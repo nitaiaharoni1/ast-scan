@@ -13,9 +13,15 @@ pub(crate) struct PyFuncInfo {
     pub end_line: usize,
     pub line_count: usize,
     pub complexity: usize,
+    pub cognitive_complexity: usize,
     pub nesting: usize,
+    pub param_count: usize,
+    /// Structural fingerprint for clone detection (normalized AST shape).
+    pub clone_hash: u64,
     pub decorators: Vec<String>,
     pub is_method: bool,
+    /// True when the containing file is classified as a test file.
+    pub is_test: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,11 +55,15 @@ pub(crate) struct TsFuncInfo {
     pub end_line: usize,
     pub line_count: usize,
     pub complexity: usize,
+    pub cognitive_complexity: usize,
     pub nesting: usize,
+    pub param_count: usize,
+    pub clone_hash: u64,
     pub exported: bool,
     pub is_component: bool,
     pub props: Vec<String>,
     pub hooks: Vec<String>,
+    pub is_test: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +104,8 @@ pub(crate) struct TsFileData {
     pub silent_catches: Vec<SilentCatchInfo>,
     pub mobx_observer_issues: Vec<MobxObserverInfo>,
     pub orm_case_issues: Vec<OrmCaseFinding>,
+    pub security_findings: Vec<SecurityFinding>,
+    pub is_test_file: bool,
 }
 
 // ── Shared types ─────────────────────────────────────────────────────────────
@@ -126,6 +138,8 @@ pub(crate) struct PyFileData {
     pub silent_excepts: Vec<SilentCatchInfo>,
     pub todo_freq: HashMap<String, usize>,
     pub todo_samples: HashMap<String, Vec<String>>,
+    pub security_findings: Vec<SecurityFinding>,
+    pub is_test_file: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -159,6 +173,15 @@ pub(crate) struct BoundaryViolation {
     pub rule: String,
 }
 
+/// Potential hardcoded secret / credential in source.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SecurityFinding {
+    pub kind: String,
+    pub file: String,
+    pub line: usize,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ConsoleDebuggerInfo {
     pub file: String,
@@ -177,13 +200,17 @@ pub(crate) struct RsFuncInfo {
     pub end_line: usize,
     pub line_count: usize,
     pub complexity: usize,
+    pub cognitive_complexity: usize,
     pub nesting: usize,
+    pub param_count: usize,
+    pub clone_hash: u64,
     pub is_method: bool,
     pub is_unsafe: bool,
     pub is_async: bool,
     pub visibility: String,
     /// `Some("MyType")` for methods inside `impl MyType`.
     pub parent_type: Option<String>,
+    pub is_test: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,4 +264,6 @@ pub(crate) struct RsFileData {
     pub allow_lint_hits: HashMap<String, usize>,
     /// Derive macro names used in this file.
     pub derive_hits: HashMap<String, usize>,
+    pub security_findings: Vec<SecurityFinding>,
+    pub is_test_file: bool,
 }

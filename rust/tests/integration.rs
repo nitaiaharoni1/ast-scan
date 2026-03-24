@@ -43,6 +43,10 @@ fn json_python_minimal_fixture() {
     assert!(v["summary"]["files"].as_u64().unwrap_or(0) >= 1);
     assert!(v.get("inventory").is_some());
     assert!(v.get("complexity").is_some());
+    assert!(v.get("cognitive").is_some());
+    assert!(v.get("code_clones").is_some());
+    assert!(v.get("security_audit").is_some());
+    assert!(v["summary"].get("test_prod").is_some());
 }
 
 #[test]
@@ -235,8 +239,29 @@ fn dogfood_rust_scan_own_source() {
     let fns = v["summary"]["functions"].as_u64().unwrap_or(0);
     assert!(fns >= 20, "self-scan should find many functions, got {fns}");
     assert!(v.get("complexity").is_some());
+    assert!(v.get("cognitive").is_some());
+    assert!(v.get("code_clones").is_some());
+    assert!(v.get("security_audit").is_some());
     assert!(v.get("coupling").is_some());
     assert!(v.get("cycles_raw").is_some());
+    assert!(
+        v["summary"].get("test_prod").is_some(),
+        "rust JSON should include summary.test_prod"
+    );
+    let row0 = v["complexity"]
+        .as_array()
+        .and_then(|a| a.first())
+        .expect("rust complexity non-empty");
+    for key in ["cognitive", "params", "is_test"] {
+        assert!(
+            row0.get(key).is_some(),
+            "rust complexity row should include {key}, got keys {:?}",
+            row0
+                .as_object()
+                .map(|o| o.keys().collect::<Vec<_>>())
+                .unwrap_or_default()
+        );
+    }
 }
 
 #[test]

@@ -95,6 +95,11 @@ struct PyCollectedData {
     todo_samples: HashMap<String, Vec<String>>,
     parse_errors: Vec<serde_json::Value>,
     file_count: usize,
+    all_security: Vec<crate::types::SecurityFinding>,
+    test_lines: usize,
+    prod_lines: usize,
+    test_functions: usize,
+    prod_functions: usize,
 }
 
 fn collect_and_aggregate(
@@ -114,6 +119,11 @@ fn collect_and_aggregate(
     let mut todo_freq: HashMap<String, usize> = HashMap::new();
     let mut todo_samples: HashMap<String, Vec<String>> = HashMap::new();
     let mut parse_errors: Vec<serde_json::Value> = Vec::new();
+    let mut all_security: Vec<crate::types::SecurityFinding> = Vec::new();
+    let mut test_lines = 0usize;
+    let mut prod_lines = 0usize;
+    let mut test_functions = 0usize;
+    let mut prod_functions = 0usize;
 
     let scan_items: Vec<file::PyFileScanItem> = files
         .par_iter()
@@ -127,6 +137,17 @@ fn collect_and_aggregate(
             }
             file::PyFileScanItem::Data(fd) => {
                 file_lines.insert(fd.rel_path.clone(), fd.line_count);
+
+                let fn_in_file =
+                    fd.functions.len() + fd.classes.iter().map(|c| c.methods.len()).sum::<usize>();
+                if fd.is_test_file {
+                    test_lines += fd.line_count;
+                    test_functions += fn_in_file;
+                } else {
+                    prod_lines += fd.line_count;
+                    prod_functions += fn_in_file;
+                }
+                all_security.extend(fd.security_findings.iter().cloned());
 
                 for fni in &fd.functions {
                     for d in &fni.decorators {
@@ -196,7 +217,43 @@ fn collect_and_aggregate(
         todo_samples,
         parse_errors,
         file_count: files.len(),
+        all_security,
+        test_lines,
+        prod_lines,
+        test_functions,
+        prod_functions,
     }
+}
+
+const CLONE_MIN_LINES: usize = 10;
+
+fn build_code_clones_py(
+    scan_root: &Path,
+    funcs: &[crate::types::PyFuncInfo],
+) -> Vec<serde_json::Value> {
+    let mut m: HashMap<u64, Vec<&crate::types::PyFuncInfo>> = HashMap::new();
+    for f in funcs {
+        if f.line_count > CLONE_MIN_LINES {
+            m.entry(f.clone_hash).or_default().push(f);
+        }
+    }
+    let mut groups: Vec<_> = m.into_iter().filter(|(_, v)| v.len() > 1).collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    groups
+        .into_iter()
+        .map(|(h, vs)| {
+            serde_json::json!({
+                "hash": format!("{h:016x}"),
+                "count": vs.len(),
+                "functions": vs.iter().map(|f| serde_json::json!({
+                    "name": f.qualname,
+                    "file": display_rel(Path::new(&f.file), scan_root),
+                    "line": f.line,
+                    "lines": f.line_count,
+                })).collect::<Vec<_>>()
+            })
+        })
+        .collect()
 }
 
 fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::Value {
@@ -247,11 +304,62 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
     let total_lines: usize = cd.file_lines.values().sum();
     let total_edges: usize = graph.values().map(|s| s.len()).sum();
 
+    let line_total_tp = cd.test_lines + cd.prod_lines;
+    let line_ratio_test = if line_total_tp > 0 {
+        cd.test_lines as f64 / line_total_tp as f64
+    } else {
+        0.0
+    };
+    let fn_total_tp = cd.test_functions + cd.prod_functions;
+    let fn_ratio_test = if fn_total_tp > 0 {
+        cd.test_functions as f64 / fn_total_tp as f64
+    } else {
+        0.0
+    };
+
     let mut complexity_rows: Vec<serde_json::Value> = cd.all_functions
         .iter()
-        .map(|fn_| serde_json::json!({"name": fn_.qualname, "cc": fn_.complexity, "nesting": fn_.nesting, "file": display_rel(Path::new(&fn_.file), scan_root), "line": fn_.line, "is_method": fn_.is_method}))
+        .map(|fn_| serde_json::json!({
+            "name": fn_.qualname,
+            "cc": fn_.complexity,
+            "cognitive": fn_.cognitive_complexity,
+            "params": fn_.param_count,
+            "nesting": fn_.nesting,
+            "file": display_rel(Path::new(&fn_.file), scan_root),
+            "line": fn_.line,
+            "is_method": fn_.is_method,
+            "is_test": fn_.is_test,
+        }))
         .collect();
     complexity_rows.sort_by(|a, b| b["cc"].as_u64().unwrap_or(0).cmp(&a["cc"].as_u64().unwrap_or(0)).then_with(|| a["name"].as_str().cmp(&b["name"].as_str())));
+
+    let mut cognitive_rows: Vec<serde_json::Value> = cd.all_functions
+        .iter()
+        .map(|fn_| serde_json::json!({
+            "name": fn_.qualname,
+            "cognitive": fn_.cognitive_complexity,
+            "file": display_rel(Path::new(&fn_.file), scan_root),
+            "line": fn_.line,
+            "is_method": fn_.is_method,
+        }))
+        .collect();
+    cognitive_rows.sort_by(|a, b| {
+        b["cognitive"]
+            .as_u64()
+            .unwrap_or(0)
+            .cmp(&a["cognitive"].as_u64().unwrap_or(0))
+            .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+    });
+
+    let code_clones = build_code_clones_py(scan_root, &cd.all_functions);
+
+    let mut security_sorted = cd.all_security;
+    security_sorted.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
 
     let mut nesting_rows: Vec<serde_json::Value> = cd.all_functions
         .iter()
@@ -309,6 +417,14 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
             "functions": cd.all_functions.len(),
             "classes": cd.all_classes.len(),
             "internal_imports": cd.all_imports.len(),
+            "test_prod": {
+                "test_lines": cd.test_lines,
+                "production_lines": cd.prod_lines,
+                "test_functions": cd.test_functions,
+                "production_functions": cd.prod_functions,
+                "line_ratio_test": line_ratio_test,
+                "function_ratio_test": fn_ratio_test,
+            },
         },
         "parse_errors": cd.parse_errors,
         "inventory": {
@@ -329,7 +445,13 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
             })).collect::<Vec<_>>(),
         },
         "complexity": complexity_rows,
+        "cognitive": cognitive_rows,
         "nesting": nesting_rows,
+        "code_clones": code_clones,
+        "security_audit": {
+            "total": security_sorted.len(),
+            "findings": serde_json::to_value(&security_sorted).unwrap_or(serde_json::Value::Null),
+        },
         "imports": {
             "modules": all_modules.len(),
             "edges": total_edges,

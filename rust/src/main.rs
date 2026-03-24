@@ -1,6 +1,8 @@
 mod audits;
+mod clones;
 mod graph;
 mod python_scanner;
+mod secrets;
 mod report;
 mod rust_scanner;
 mod scanner;
@@ -22,6 +24,7 @@ use scanner::{PythonScanner, RustScanner, ScanMode, Scanner, TypeScriptScanner};
 const PY_TEXT_SKIP: &[&str] = &[
     "inventory",
     "complexity",
+    "cognitive",
     "nesting",
     "imports",
     "coupling",
@@ -31,6 +34,9 @@ const PY_TEXT_SKIP: &[&str] = &[
     "todo-audit",
     "decorators",
     "routes",
+    "code-clones",
+    "security-audit",
+    "test-prod",
 ];
 
 #[derive(Parser, Debug)]
@@ -83,6 +89,12 @@ struct Cli {
 
     #[arg(long, help = "Exit 1 if any function has cyclomatic complexity > N")]
     max_complexity: Option<u64>,
+
+    #[arg(long, help = "Exit 1 if any function has cognitive complexity > N")]
+    max_cognitive_complexity: Option<u64>,
+
+    #[arg(long, help = "Exit 1 if any function has more than N formal parameters")]
+    max_params: Option<u64>,
 
     #[arg(long, help = "Exit 1 if any function has nesting depth > N")]
     max_nesting: Option<u64>,
@@ -327,6 +339,8 @@ fn emit_multi_json(parts: &[(ScanMode, Value)], report_title: String) -> anyhow:
 fn check_thresholds(
     data: &Value,
     max_cc: Option<u64>,
+    max_cognitive: Option<u64>,
+    max_params: Option<u64>,
     max_nest: Option<u64>,
     max_cyc: Option<u64>,
 ) -> Vec<String> {
@@ -339,6 +353,40 @@ fn check_thresholds(
                 if cc > limit {
                     violations.push(format!(
                         "CC={cc} exceeds --max-complexity {limit}: {} [{}:{}]",
+                        row["name"].as_str().unwrap_or(""),
+                        row["file"].as_str().unwrap_or(""),
+                        row["line"].as_u64().unwrap_or(0)
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(limit) = max_cognitive {
+        if let Some(arr) = data["complexity"].as_array() {
+            for row in arr {
+                let cg = row["cognitive"].as_u64().unwrap_or(0);
+                if cg > limit {
+                    violations.push(format!(
+                        "cognitive={cg} exceeds --max-cognitive-complexity {limit}: {} [{}:{}]",
+                        row["name"].as_str().unwrap_or(""),
+                        row["file"].as_str().unwrap_or(""),
+                        row["line"].as_u64().unwrap_or(0)
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(limit) = max_params {
+        if let Some(arr) = data["complexity"].as_array() {
+            for row in arr {
+                let p = row["params"].as_u64().unwrap_or(0);
+                if p > limit {
+                    violations.push(format!(
+                        "params={p} exceed --max-params {limit}: {} [{}:{}]",
                         row["name"].as_str().unwrap_or(""),
                         row["file"].as_str().unwrap_or(""),
                         row["line"].as_u64().unwrap_or(0)
@@ -532,9 +580,16 @@ fn emit_output(
             ts_boundary_fail = true;
         }
         all_violations.extend(
-            check_thresholds(data, cli.max_complexity, cli.max_nesting, cli.max_cycles)
-                .into_iter()
-                .map(|v| format!("[{}] {}", mode.threshold_label(), v)),
+            check_thresholds(
+                data,
+                cli.max_complexity,
+                cli.max_cognitive_complexity,
+                cli.max_params,
+                cli.max_nesting,
+                cli.max_cycles,
+            )
+            .into_iter()
+            .map(|v| format!("[{}] {}", mode.threshold_label(), v)),
         );
     }
 

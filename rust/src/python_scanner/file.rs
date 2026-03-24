@@ -14,8 +14,9 @@ use crate::audits::collect_todo_comments;
 use crate::types::{ImportEdge, PyClassInfo, PyFileData, PyFuncInfo, RouteInfo};
 
 use super::visitors::{
-    collect_silent_excepts, compute_complexity, compute_max_nesting, decorator_repr, extract_route,
-    line_at, line_at_end, process_import,
+    collect_py_security, collect_silent_excepts, compute_cognitive_complexity, compute_complexity,
+    compute_max_nesting, count_python_params, decorator_repr, extract_route, line_at, line_at_end,
+    process_import, python_body_shape_hash,
 };
 use super::{display_rel, file_to_module};
 
@@ -53,11 +54,27 @@ fn collect_all_export_strings(expr: &Expr, exports: &mut Vec<String>) {
     }
 }
 
+fn is_python_test_path(rel: &str) -> bool {
+    let lower = rel.replace('\\', "/").to_ascii_lowercase();
+    if lower.contains("/tests/") || lower.starts_with("tests/") {
+        return true;
+    }
+    Path::new(rel)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|n| {
+            n.starts_with("test_")
+                || n.ends_with("_test.py")
+                || n.ends_with("_tests.py")
+        })
+}
+
 struct FileAnalyzer<'a> {
     filepath: &'a str,
     module: &'a str,
     pkg: &'a str,
     source: &'a str,
+    is_test_file: bool,
     functions: Vec<PyFuncInfo>,
     classes: Vec<PyClassInfo>,
     imports: Vec<ImportEdge>,
@@ -68,12 +85,13 @@ struct FileAnalyzer<'a> {
 }
 
 impl<'a> FileAnalyzer<'a> {
-    fn new(filepath: &'a str, module: &'a str, pkg: &'a str, source: &'a str) -> Self {
+    fn new(filepath: &'a str, module: &'a str, pkg: &'a str, source: &'a str, is_test_file: bool) -> Self {
         Self {
             filepath,
             module,
             pkg,
             source,
+            is_test_file,
             functions: Vec::new(),
             classes: Vec::new(),
             imports: Vec::new(),
@@ -93,7 +111,10 @@ impl<'a> FileAnalyzer<'a> {
             format!("{}.{}", self.class_stack.join("."), node.name)
         };
         let complexity = compute_complexity(&node.body);
+        let cognitive_complexity = compute_cognitive_complexity(&node.body);
         let nesting = compute_max_nesting(&node.body);
+        let param_count = count_python_params(&node.args, is_method);
+        let clone_hash = python_body_shape_hash(&node.body);
         let decorators: Vec<_> = node.decorator_list.iter().map(decorator_repr).collect();
         let info = PyFuncInfo {
             name: node.name.to_string(),
@@ -103,9 +124,13 @@ impl<'a> FileAnalyzer<'a> {
             end_line,
             line_count: end_line.saturating_sub(line) + 1,
             complexity,
+            cognitive_complexity,
             nesting,
+            param_count,
+            clone_hash,
             decorators: decorators.clone(),
             is_method,
+            is_test: self.is_test_file,
         };
         if let Some(r) = extract_route(
             node.name.as_ref(),
@@ -134,7 +159,10 @@ impl<'a> FileAnalyzer<'a> {
             format!("{}.{}", self.class_stack.join("."), node.name)
         };
         let complexity = compute_complexity(&node.body);
+        let cognitive_complexity = compute_cognitive_complexity(&node.body);
         let nesting = compute_max_nesting(&node.body);
+        let param_count = count_python_params(&node.args, is_method);
+        let clone_hash = python_body_shape_hash(&node.body);
         let decorators: Vec<_> = node.decorator_list.iter().map(decorator_repr).collect();
         let info = PyFuncInfo {
             name: node.name.to_string(),
@@ -144,9 +172,13 @@ impl<'a> FileAnalyzer<'a> {
             end_line,
             line_count: end_line.saturating_sub(line) + 1,
             complexity,
+            cognitive_complexity,
             nesting,
+            param_count,
+            clone_hash,
             decorators: decorators.clone(),
             is_method,
+            is_test: self.is_test_file,
         };
         if let Some(r) = extract_route(
             node.name.as_ref(),
@@ -260,7 +292,8 @@ pub(super) fn analyze_py_file(fpath: &Path, scan_root: &Path, pkg: &str) -> Opti
     };
 
     let abs = fpath.display().to_string();
-    let mut an = FileAnalyzer::new(&abs, &module, pkg, &source);
+    let is_test_file = is_python_test_path(&rel);
+    let mut an = FileAnalyzer::new(&abs, &module, pkg, &source, is_test_file);
     an.visit_module(&body);
 
     let mut todo_freq = HashMap::new();
@@ -269,6 +302,9 @@ pub(super) fn analyze_py_file(fpath: &Path, scan_root: &Path, pkg: &str) -> Opti
 
     let mut silent_excepts = Vec::new();
     collect_silent_excepts(&body, &rel, &source, &mut silent_excepts);
+
+    let mut security_findings = Vec::new();
+    collect_py_security(&body, &rel, &source, &mut security_findings);
 
     Some(PyFileScanItem::Data(Box::new(PyFileData {
         module: module.clone(),
@@ -282,5 +318,7 @@ pub(super) fn analyze_py_file(fpath: &Path, scan_root: &Path, pkg: &str) -> Opti
         silent_excepts,
         todo_freq,
         todo_samples,
+        security_findings,
+        is_test_file,
     })))
 }

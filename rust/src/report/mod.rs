@@ -181,6 +181,95 @@ fn has_parse_errors(data: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Lines after summary stats: test vs production file metrics.
+pub(crate) fn print_test_prod_lines(tp: &Value) {
+    if tp.is_null() || !tp.is_object() {
+        return;
+    }
+    let tl = tp["test_lines"].as_u64().unwrap_or(0);
+    let pl = tp["production_lines"].as_u64().unwrap_or(0);
+    let tf = tp["test_functions"].as_u64().unwrap_or(0);
+    let pf = tp["production_functions"].as_u64().unwrap_or(0);
+    let lr = tp["line_ratio_test"].as_f64().unwrap_or(0.0);
+    let fr = tp["function_ratio_test"].as_f64().unwrap_or(0.0);
+    println!("  Test / prod lines:     {tl} / {pl}  (test share: {:.1}%)", lr * 100.0);
+    println!(
+        "  Test / prod functions: {tf} / {pf}  (test share: {:.1}%)",
+        fr * 100.0
+    );
+    println!();
+}
+
+pub(crate) fn print_cognitive_section(data: &Value, top: usize, header_suffix: &str) {
+    section_header(&format!("2a. COGNITIVE COMPLEXITY — Top {top} {header_suffix}"));
+    if let Some(arr) = data["cognitive"].as_array() {
+        for row in arr.iter().take(top) {
+            println!(
+                "  cog={:>4}  {}  [{}:{}]",
+                row["cognitive"].as_u64().unwrap_or(0),
+                row["name"].as_str().unwrap_or(""),
+                row["file"].as_str().unwrap_or(""),
+                row["line"].as_u64().unwrap_or(0)
+            );
+        }
+    }
+    println!();
+}
+
+pub(crate) fn print_code_clones_section(data: &Value, top: usize) {
+    section_header(&format!("CLONE GROUPS — Top {top} (structural hash, >10 lines)"));
+    if let Some(arr) = data["code_clones"].as_array() {
+        if arr.is_empty() {
+            println!("  None found.");
+        } else {
+            for g in arr.iter().take(top) {
+                let cnt = g["count"].as_u64().unwrap_or(0);
+                let h = g["hash"].as_str().unwrap_or("");
+                println!("  [{h}] {cnt} similar function(s):");
+                if let Some(funcs) = g["functions"].as_array() {
+                    for f in funcs.iter().take(8) {
+                        println!(
+                            "      {}  [{}:{}] ({} lines)",
+                            f["name"].as_str().unwrap_or(""),
+                            f["file"].as_str().unwrap_or(""),
+                            f["line"].as_u64().unwrap_or(0),
+                            f["lines"].as_u64().unwrap_or(0)
+                        );
+                    }
+                    if funcs.len() > 8 {
+                        println!("      ... and {} more", funcs.len() - 8);
+                    }
+                }
+                println!();
+            }
+        }
+    }
+    println!();
+}
+
+pub(crate) fn print_security_audit_section(data: &Value, cap: usize) {
+    section_header("SECURITY AUDIT (heuristic string literals)");
+    let audit = &data["security_audit"];
+    let total = audit["total"].as_u64().unwrap_or(0);
+    println!("  {total} finding(s):");
+    println!();
+    if let Some(arr) = audit["findings"].as_array() {
+        for f in arr.iter().take(cap) {
+            println!(
+                "  [{}] {}:{} — {}",
+                f["kind"].as_str().unwrap_or(""),
+                f["file"].as_str().unwrap_or(""),
+                f["line"].as_u64().unwrap_or(0),
+                f["detail"].as_str().unwrap_or("")
+            );
+        }
+        if arr.len() > cap {
+            println!("  ... and {} more", arr.len() - cap);
+        }
+    }
+    println!();
+}
+
 fn print_import_top_modules(imp: &Value, top: usize) {
     sub_header(&format!("Top {top} Most-Imported Internal Modules"));
     if let Some(arr) = imp["top_imported"].as_array() {

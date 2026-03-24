@@ -1,6 +1,8 @@
 //! Python AST visitors: complexity, nesting, dependency collection, silent handlers.
 
-use crate::types::{ImportEdge, RouteInfo};
+use crate::clones;
+use crate::secrets;
+use crate::types::{ImportEdge, RouteInfo, SecurityFinding};
 
 use rustpython_parser::{
     ast::Ranged,
@@ -541,6 +543,740 @@ pub(super) fn compute_max_nesting(body: &[Stmt]) -> usize {
         nesting_stmt(st, 0, &mut max_d);
     }
     max_d
+}
+
+// ---------------------------------------------------------------------------
+// Cognitive complexity (nesting-weighted branching)
+// ---------------------------------------------------------------------------
+
+fn cog_comprehension(c: &Comprehension, nest: usize, acc: &mut usize) {
+    *acc += 1 + nest + c.ifs.len() * (1 + nest);
+    cog_expr(&c.target, nest, acc);
+    cog_expr(&c.iter, nest, acc);
+    for iff in &c.ifs {
+        cog_expr(iff, nest, acc);
+    }
+}
+
+fn cog_expr(expr: &Expr, nest: usize, acc: &mut usize) {
+    match expr {
+        Expr::BoolOp(b) => {
+            *acc += b.values.len().saturating_sub(1) * (1 + nest);
+            for v in &b.values {
+                cog_expr(v, nest, acc);
+            }
+            return;
+        }
+        Expr::IfExp(i) => {
+            *acc += 1 + nest;
+            cog_expr(&i.test, nest, acc);
+            cog_expr(&i.body, nest + 1, acc);
+            cog_expr(&i.orelse, nest + 1, acc);
+            return;
+        }
+        Expr::Lambda(l) => {
+            for a in &l.args.posonlyargs {
+                if let Some(ann) = &a.def.annotation {
+                    cog_expr(ann, nest, acc);
+                }
+                if let Some(d) = &a.default {
+                    cog_expr(d, nest, acc);
+                }
+            }
+            for a in &l.args.args {
+                if let Some(ann) = &a.def.annotation {
+                    cog_expr(ann, nest, acc);
+                }
+                if let Some(d) = &a.default {
+                    cog_expr(d, nest, acc);
+                }
+            }
+            if let Some(v) = &l.args.vararg {
+                if let Some(ann) = &v.annotation {
+                    cog_expr(ann, nest, acc);
+                }
+            }
+            for a in &l.args.kwonlyargs {
+                if let Some(ann) = &a.def.annotation {
+                    cog_expr(ann, nest, acc);
+                }
+                if let Some(d) = &a.default {
+                    cog_expr(d, nest, acc);
+                }
+            }
+            if let Some(k) = &l.args.kwarg {
+                if let Some(ann) = &k.annotation {
+                    cog_expr(ann, nest, acc);
+                }
+            }
+            cog_expr(&l.body, nest, acc);
+            return;
+        }
+        Expr::ListComp(l) => {
+            cog_expr(&l.elt, nest, acc);
+            for g in &l.generators {
+                cog_comprehension(g, nest, acc);
+            }
+            return;
+        }
+        Expr::SetComp(s) => {
+            cog_expr(&s.elt, nest, acc);
+            for g in &s.generators {
+                cog_comprehension(g, nest, acc);
+            }
+            return;
+        }
+        Expr::DictComp(d) => {
+            cog_expr(&d.key, nest, acc);
+            cog_expr(&d.value, nest, acc);
+            for g in &d.generators {
+                cog_comprehension(g, nest, acc);
+            }
+            return;
+        }
+        Expr::GeneratorExp(g) => {
+            cog_expr(&g.elt, nest, acc);
+            for gen in &g.generators {
+                cog_comprehension(gen, nest, acc);
+            }
+            return;
+        }
+        _ => {}
+    }
+    for_each_child_expr(expr, &mut |child| cog_expr(child, nest, acc));
+}
+
+fn cog_except_handler(h: &ExceptHandler, nest: usize, acc: &mut usize) {
+    *acc += 1 + nest;
+    let ExceptHandler::ExceptHandler(eh) = h;
+    if let Some(ty) = &eh.type_ {
+        cog_expr(ty, nest + 1, acc);
+    }
+    for st in &eh.body {
+        cog_stmt(st, nest + 1, acc);
+    }
+}
+
+fn cog_function_like(args: &Arguments, decorators: &[Expr], body: &[Stmt], nest: usize, acc: &mut usize) {
+    for d in decorators {
+        cog_expr(d, nest, acc);
+    }
+    for a in &args.posonlyargs {
+        if let Some(ann) = &a.def.annotation {
+            cog_expr(ann, nest, acc);
+        }
+        if let Some(d) = &a.default {
+            cog_expr(d, nest, acc);
+        }
+    }
+    for a in &args.args {
+        if let Some(ann) = &a.def.annotation {
+            cog_expr(ann, nest, acc);
+        }
+        if let Some(d) = &a.default {
+            cog_expr(d, nest, acc);
+        }
+    }
+    if let Some(v) = &args.vararg {
+        if let Some(ann) = &v.annotation {
+            cog_expr(ann, nest, acc);
+        }
+    }
+    for a in &args.kwonlyargs {
+        if let Some(ann) = &a.def.annotation {
+            cog_expr(ann, nest, acc);
+        }
+        if let Some(d) = &a.default {
+            cog_expr(d, nest, acc);
+        }
+    }
+    if let Some(k) = &args.kwarg {
+        if let Some(ann) = &k.annotation {
+            cog_expr(ann, nest, acc);
+        }
+    }
+    for st in body {
+        cog_stmt(st, nest, acc);
+    }
+}
+
+fn cog_stmt(stmt: &Stmt, nest: usize, acc: &mut usize) {
+    match stmt {
+        Stmt::FunctionDef(f) => {
+            cog_function_like(&f.args, &f.decorator_list, &f.body, nest, acc);
+            return;
+        }
+        Stmt::AsyncFunctionDef(f) => {
+            cog_function_like(&f.args, &f.decorator_list, &f.body, nest, acc);
+            return;
+        }
+        Stmt::ClassDef(c) => {
+            for d in &c.decorator_list {
+                cog_expr(d, nest, acc);
+            }
+            for b in &c.bases {
+                cog_expr(b, nest, acc);
+            }
+            for st in &c.body {
+                cog_stmt(st, nest, acc);
+            }
+            return;
+        }
+        Stmt::If(i) => {
+            *acc += 1 + nest;
+            for st in &i.body {
+                cog_stmt(st, nest + 1, acc);
+            }
+            for st in &i.orelse {
+                cog_stmt(st, nest + 1, acc);
+            }
+            return;
+        }
+        Stmt::For(f) => {
+            *acc += 1 + nest;
+            cog_expr(&f.iter, nest + 1, acc);
+            for st in &f.body {
+                cog_stmt(st, nest + 1, acc);
+            }
+            for st in &f.orelse {
+                cog_stmt(st, nest + 1, acc);
+            }
+            return;
+        }
+        Stmt::AsyncFor(f) => {
+            *acc += 1 + nest;
+            cog_expr(&f.iter, nest + 1, acc);
+            for st in &f.body {
+                cog_stmt(st, nest + 1, acc);
+            }
+            for st in &f.orelse {
+                cog_stmt(st, nest + 1, acc);
+            }
+            return;
+        }
+        Stmt::While(w) => {
+            *acc += 1 + nest;
+            cog_expr(&w.test, nest + 1, acc);
+            for st in &w.body {
+                cog_stmt(st, nest + 1, acc);
+            }
+            for st in &w.orelse {
+                cog_stmt(st, nest + 1, acc);
+            }
+            return;
+        }
+        Stmt::With(w) => {
+            *acc += 1 + nest;
+            for item in &w.items {
+                cog_expr(&item.context_expr, nest + 1, acc);
+                if let Some(v) = &item.optional_vars {
+                    cog_expr(v, nest + 1, acc);
+                }
+            }
+            for st in &w.body {
+                cog_stmt(st, nest + 1, acc);
+            }
+            return;
+        }
+        Stmt::AsyncWith(w) => {
+            *acc += 1 + nest;
+            for item in &w.items {
+                cog_expr(&item.context_expr, nest + 1, acc);
+                if let Some(v) = &item.optional_vars {
+                    cog_expr(v, nest + 1, acc);
+                }
+            }
+            for st in &w.body {
+                cog_stmt(st, nest + 1, acc);
+            }
+            return;
+        }
+        Stmt::Match(m) => {
+            *acc += 1 + nest;
+            cog_expr(&m.subject, nest + 1, acc);
+            for case in &m.cases {
+                if let Some(g) = &case.guard {
+                    cog_expr(g, nest + 1, acc);
+                }
+                for st in &case.body {
+                    cog_stmt(st, nest + 1, acc);
+                }
+            }
+            return;
+        }
+        Stmt::Try(t) => {
+            for st in &t.body {
+                cog_stmt(st, nest + 1, acc);
+            }
+            for h in &t.handlers {
+                cog_except_handler(h, nest, acc);
+            }
+            for st in &t.orelse {
+                cog_stmt(st, nest + 1, acc);
+            }
+            for st in &t.finalbody {
+                cog_stmt(st, nest + 1, acc);
+            }
+            return;
+        }
+        Stmt::TryStar(t) => {
+            for st in &t.body {
+                cog_stmt(st, nest + 1, acc);
+            }
+            for h in &t.handlers {
+                cog_except_handler(h, nest, acc);
+            }
+            for st in &t.orelse {
+                cog_stmt(st, nest + 1, acc);
+            }
+            for st in &t.finalbody {
+                cog_stmt(st, nest + 1, acc);
+            }
+            return;
+        }
+        _ => {}
+    }
+    if matches!(stmt, Stmt::Assert(_)) {
+        *acc += 1 + nest;
+    }
+    for_each_child_stmt(stmt, &mut |child| cog_stmt(child, nest, acc));
+    for_each_handler(stmt, &mut |h| cog_except_handler(h, nest, acc));
+    for_each_expr_in_stmt(stmt, &mut |e| cog_expr(e, nest, acc));
+}
+
+pub(super) fn compute_cognitive_complexity(body: &[Stmt]) -> usize {
+    let mut acc = 0usize;
+    for st in body {
+        cog_stmt(st, 0, &mut acc);
+    }
+    acc
+}
+
+pub(super) fn count_python_params(args: &Arguments, is_method: bool) -> usize {
+    let mut n = args.posonlyargs.len() + args.args.len();
+    if is_method && !args.args.is_empty() {
+        let id = args.args[0].def.arg.as_str();
+        if id == "self" || id == "cls" {
+            n = n.saturating_sub(1);
+        }
+    }
+    n += args.vararg.is_some() as usize;
+    n += args.kwonlyargs.len();
+    n += args.kwarg.is_some() as usize;
+    n
+}
+
+// ---------------------------------------------------------------------------
+// Structural shape for clone detection (normalized)
+// ---------------------------------------------------------------------------
+
+fn shape_expr(expr: &Expr, out: &mut String) {
+    match expr {
+        Expr::Constant(_) => out.push_str("LIT|"),
+        Expr::Name(_) => out.push_str("NAME|"),
+        Expr::BoolOp(b) => {
+            out.push_str("BOOLOP|");
+            for v in &b.values {
+                shape_expr(v, out);
+            }
+        }
+        Expr::BinOp(b) => {
+            out.push_str("BINOP|");
+            shape_expr(&b.left, out);
+            shape_expr(&b.right, out);
+        }
+        Expr::UnaryOp(u) => {
+            out.push_str("UNOP|");
+            shape_expr(&u.operand, out);
+        }
+        Expr::Lambda(l) => {
+            out.push_str("LAMBDA|");
+            shape_expr(&l.body, out);
+        }
+        Expr::IfExp(i) => {
+            out.push_str("IFEXP|");
+            shape_expr(&i.test, out);
+            shape_expr(&i.body, out);
+            shape_expr(&i.orelse, out);
+        }
+        Expr::Dict(d) => {
+            out.push_str("DICT|");
+            for (maybe_k, v) in d.keys.iter().zip(&d.values) {
+                if let Some(k) = maybe_k {
+                    shape_expr(k, out);
+                }
+                shape_expr(v, out);
+            }
+        }
+        Expr::Set(s) => {
+            out.push_str("SET|");
+            for e in &s.elts {
+                shape_expr(e, out);
+            }
+        }
+        Expr::List(l) => {
+            out.push_str("LIST|");
+            for e in &l.elts {
+                shape_expr(e, out);
+            }
+        }
+        Expr::Tuple(t) => {
+            out.push_str("TUPLE|");
+            for e in &t.elts {
+                shape_expr(e, out);
+            }
+        }
+        Expr::ListComp(l) => {
+            out.push_str("LISTCOMP|");
+            shape_expr(&l.elt, out);
+            for g in &l.generators {
+                shape_expr(&g.target, out);
+                shape_expr(&g.iter, out);
+                for iff in &g.ifs {
+                    shape_expr(iff, out);
+                }
+            }
+        }
+        Expr::SetComp(s) => {
+            out.push_str("SETCOMP|");
+            shape_expr(&s.elt, out);
+            for g in &s.generators {
+                shape_expr(&g.target, out);
+                shape_expr(&g.iter, out);
+                for iff in &g.ifs {
+                    shape_expr(iff, out);
+                }
+            }
+        }
+        Expr::DictComp(d) => {
+            out.push_str("DICTCOMP|");
+            shape_expr(&d.key, out);
+            shape_expr(&d.value, out);
+            for g in &d.generators {
+                shape_expr(&g.target, out);
+                shape_expr(&g.iter, out);
+                for iff in &g.ifs {
+                    shape_expr(iff, out);
+                }
+            }
+        }
+        Expr::GeneratorExp(g) => {
+            out.push_str("GENEXP|");
+            shape_expr(&g.elt, out);
+            for gen in &g.generators {
+                shape_expr(&gen.target, out);
+                shape_expr(&gen.iter, out);
+                for iff in &gen.ifs {
+                    shape_expr(iff, out);
+                }
+            }
+        }
+        Expr::Await(a) => {
+            out.push_str("AWAIT|");
+            shape_expr(&a.value, out);
+        }
+        Expr::Yield(y) => {
+            out.push_str("YIELD|");
+            if let Some(v) = &y.value {
+                shape_expr(v, out);
+            }
+        }
+        Expr::YieldFrom(y) => {
+            out.push_str("YIELDFROM|");
+            shape_expr(&y.value, out);
+        }
+        Expr::Compare(c) => {
+            out.push_str("CMP|");
+            shape_expr(&c.left, out);
+            for comp in &c.comparators {
+                shape_expr(comp, out);
+            }
+        }
+        Expr::Call(c) => {
+            out.push_str("CALL|");
+            shape_expr(&c.func, out);
+            for a in &c.args {
+                shape_expr(a, out);
+            }
+            for kw in &c.keywords {
+                shape_expr(&kw.value, out);
+            }
+        }
+        Expr::FormattedValue(f) => {
+            out.push_str("FVAL|");
+            shape_expr(&f.value, out);
+        }
+        Expr::JoinedStr(j) => {
+            out.push_str("FSTR|");
+            for v in &j.values {
+                shape_expr(v, out);
+            }
+        }
+        Expr::Attribute(a) => {
+            out.push_str("ATTR|");
+            shape_expr(&a.value, out);
+        }
+        Expr::Subscript(s) => {
+            out.push_str("SUB|");
+            shape_expr(&s.value, out);
+            shape_expr(&s.slice, out);
+        }
+        Expr::Starred(s) => {
+            out.push_str("STAR|");
+            shape_expr(&s.value, out);
+        }
+        Expr::NamedExpr(n) => {
+            out.push_str("NAMED|");
+            shape_expr(&n.target, out);
+            shape_expr(&n.value, out);
+        }
+        _ => out.push_str("EXPR|"),
+    }
+}
+
+fn shape_stmt(stmt: &Stmt, out: &mut String) {
+    match stmt {
+        Stmt::FunctionDef(f) => {
+            out.push_str("DEF|");
+            for st in &f.body {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::AsyncFunctionDef(f) => {
+            out.push_str("ASYNCDEF|");
+            for st in &f.body {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::ClassDef(c) => {
+            out.push_str("CLASS|");
+            for st in &c.body {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::Return(r) => {
+            out.push_str("RET|");
+            if let Some(v) = &r.value {
+                shape_expr(v, out);
+            }
+        }
+        Stmt::Delete(d) => {
+            out.push_str("DEL|");
+            for t in &d.targets {
+                shape_expr(t, out);
+            }
+        }
+        Stmt::Assign(a) => {
+            out.push_str("ASSIGN|");
+            for t in &a.targets {
+                shape_expr(t, out);
+            }
+            shape_expr(&a.value, out);
+        }
+        Stmt::AugAssign(a) => {
+            out.push_str("AUGASSIGN|");
+            shape_expr(&a.target, out);
+            shape_expr(&a.value, out);
+        }
+        Stmt::AnnAssign(a) => {
+            out.push_str("ANNASSIGN|");
+            shape_expr(&a.target, out);
+            if let Some(v) = &a.value {
+                shape_expr(v, out);
+            }
+        }
+        Stmt::For(f) => {
+            out.push_str("FOR|");
+            shape_expr(&f.target, out);
+            shape_expr(&f.iter, out);
+            for st in &f.body {
+                shape_stmt(st, out);
+            }
+            for st in &f.orelse {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::AsyncFor(f) => {
+            out.push_str("AFOR|");
+            shape_expr(&f.target, out);
+            shape_expr(&f.iter, out);
+            for st in &f.body {
+                shape_stmt(st, out);
+            }
+            for st in &f.orelse {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::While(w) => {
+            out.push_str("WHILE|");
+            shape_expr(&w.test, out);
+            for st in &w.body {
+                shape_stmt(st, out);
+            }
+            for st in &w.orelse {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::If(i) => {
+            out.push_str("IF|");
+            shape_expr(&i.test, out);
+            for st in &i.body {
+                shape_stmt(st, out);
+            }
+            for st in &i.orelse {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::With(w) => {
+            out.push_str("WITH|");
+            for st in &w.body {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::AsyncWith(w) => {
+            out.push_str("AWITH|");
+            for st in &w.body {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::Match(m) => {
+            out.push_str("MATCH|");
+            shape_expr(&m.subject, out);
+            for case in &m.cases {
+                for st in &case.body {
+                    shape_stmt(st, out);
+                }
+            }
+        }
+        Stmt::Raise(r) => {
+            out.push_str("RAISE|");
+            if let Some(e) = &r.exc {
+                shape_expr(e, out);
+            }
+        }
+        Stmt::Try(t) => {
+            out.push_str("TRY|");
+            for st in &t.body {
+                shape_stmt(st, out);
+            }
+            for st in &t.orelse {
+                shape_stmt(st, out);
+            }
+            for st in &t.finalbody {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::TryStar(t) => {
+            out.push_str("TRYSTAR|");
+            for st in &t.body {
+                shape_stmt(st, out);
+            }
+            for st in &t.orelse {
+                shape_stmt(st, out);
+            }
+            for st in &t.finalbody {
+                shape_stmt(st, out);
+            }
+        }
+        Stmt::Assert(a) => {
+            out.push_str("ASSERT|");
+            shape_expr(&a.test, out);
+            if let Some(msg) = &a.msg {
+                shape_expr(msg, out);
+            }
+        }
+        Stmt::Import(_) => out.push_str("IMPORT|"),
+        Stmt::ImportFrom(_) => out.push_str("IMPORTFROM|"),
+        Stmt::Global(_) => out.push_str("GLOBAL|"),
+        Stmt::Nonlocal(_) => out.push_str("NONLOCAL|"),
+        Stmt::Pass(_) => out.push_str("PASS|"),
+        Stmt::Break(_) => out.push_str("BREAK|"),
+        Stmt::Continue(_) => out.push_str("CONTINUE|"),
+        Stmt::Expr(e) => {
+            out.push_str("EXPRSTMT|");
+            shape_expr(&e.value, out);
+        }
+        Stmt::TypeAlias(_) => out.push_str("TYPEALIAS|"),
+    }
+}
+
+pub(super) fn python_body_shape_hash(body: &[Stmt]) -> u64 {
+    let mut s = String::new();
+    for st in body {
+        shape_stmt(st, &mut s);
+    }
+    clones::hash_shape(&s)
+}
+
+fn assign_target_hint(expr: &Expr) -> String {
+    match expr {
+        Expr::Name(n) => n.id.to_string(),
+        Expr::Attribute(a) => {
+            format!("{}.{}", assign_target_hint(&a.value), a.attr)
+        }
+        Expr::Subscript(sub) => {
+            format!("{}[]", assign_target_hint(&sub.value))
+        }
+        Expr::Tuple(t) => t
+            .elts
+            .iter()
+            .map(assign_target_hint)
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => "?".into(),
+    }
+}
+
+pub(super) fn collect_py_security(
+    body: &[Stmt],
+    filepath: &str,
+    source: &str,
+    out: &mut Vec<SecurityFinding>,
+) {
+    for stmt in body {
+        security_stmt(stmt, filepath, source, out);
+    }
+}
+
+fn security_stmt(stmt: &Stmt, filepath: &str, source: &str, out: &mut Vec<SecurityFinding>) {
+    match stmt {
+        Stmt::Assign(a) => {
+            let hint = a
+                .targets
+                .first()
+                .map(assign_target_hint)
+                .unwrap_or_default();
+            if let Expr::Constant(c) = a.value.as_ref() {
+                if let Constant::Str(val) = &c.value {
+                    let line = line_at(source, c.range().start());
+                    if let Some(f) = secrets::audit_string_literal(val, filepath, line, &hint) {
+                        out.push(f);
+                    }
+                }
+            }
+        }
+        Stmt::AnnAssign(a) => {
+            let hint = assign_target_hint(&a.target);
+            if let Some(v) = &a.value {
+                if let Expr::Constant(c) = v.as_ref() {
+                    if let Constant::Str(val) = &c.value {
+                        let line = line_at(source, c.range().start());
+                        if let Some(f) = secrets::audit_string_literal(val, filepath, line, &hint) {
+                            out.push(f);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    for_each_child_stmt(stmt, &mut |child| security_stmt(child, filepath, source, out));
+    for_each_handler(stmt, &mut |h| {
+        let ExceptHandler::ExceptHandler(eh) = h;
+        for st in &eh.body {
+            security_stmt(st, filepath, source, out);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
