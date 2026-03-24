@@ -12,6 +12,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# Sections that can be omitted from the text report via --skip (does not affect --json).
+PY_TEXT_SKIP_SECTIONS = frozenset(
+    {
+        "inventory",
+        "complexity",
+        "imports",
+        "cycles",
+        "dead-exports",
+        "decorators",
+        "routes",
+    }
+)
+
 
 # ── Data classes ──────────────────────────────────────────────────────────────
 
@@ -480,9 +493,6 @@ def analyze_python(
 
 
 def print_text_report(data: dict[str, Any], title: str, top: int, skip: set[str]) -> None:
-    scan_root = Path(data["scan_root"])
-    rel = lambda p: display_rel(p, scan_root)  # noqa: E731
-
     def sep() -> None:
         print("=" * 72)
 
@@ -596,7 +606,7 @@ def print_text_report(data: dict[str, Any], title: str, top: int, skip: set[str]
             print(f"  {'METHOD':<8} {'PATH':<40} {'HANDLER':<30} {'FILE'}")
             print("  " + "-" * 110)
             for r in routes:
-                rf = rel(r["file"])
+                rf = r["file"]
                 deps_str = f"  deps: {', '.join(r['dependencies'])}" if r.get("dependencies") else ""
                 print(f"  {r['method']:<8} {r['path']:<40} {r['handler']:<30} {rf}:{r['line']}{deps_str}")
         else:
@@ -637,13 +647,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Report title (default: derived from path)",
     )
     p.add_argument("--top", type=int, default=20, help="How many items to show in ranked sections")
-    p.add_argument("--json", action="store_true", help="Emit JSON instead of text report")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit full JSON report (all sections; --skip applies only to text output)",
+    )
     p.add_argument(
         "--skip",
         action="append",
         default=[],
-        help="Skip section (repeatable): inventory, complexity, imports, cycles, "
-        "dead-exports, decorators, routes",
+        metavar="SECTION",
+        help="Omit SECTION from text report only (repeatable): inventory, complexity, "
+        "imports, cycles, dead-exports, decorators, routes",
     )
     return p.parse_args(argv)
 
@@ -654,6 +669,15 @@ def main(argv: list[str] | None = None) -> None:
     pkg = args.pkg or scan_root.resolve().name
     title = args.title or f"{pkg.upper()} — AST ANALYSIS (Python)"
     skip = set(args.skip)
+    unknown = skip - PY_TEXT_SKIP_SECTIONS
+    if unknown:
+        bad = ", ".join(sorted(unknown))
+        print(
+            f"ast-scan: unknown --skip section(s): {bad}. "
+            f"Valid: {', '.join(sorted(PY_TEXT_SKIP_SECTIONS))}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     data = analyze_python(scan_root, pkg)
     data["title"] = title

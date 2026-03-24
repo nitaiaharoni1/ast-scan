@@ -24,10 +24,11 @@ This repository ships **two installable CLIs** with the same command name (`ast-
 
 ### Python (scan Python packages)
 
-From the `python/` directory:
+From the `python/` directory (use a [virtual environment](https://docs.python.org/3/library/venv.html) if your OS uses PEP 668):
 
 ```bash
 cd python
+python3 -m venv .venv && source .venv/bin/activate   # optional
 pip install .
 # or editable:
 pip install -e .
@@ -81,9 +82,11 @@ ast-scan ./src/myapp --pkg myapp --json > report.json
 ast-scan ./src --json > report-frontend.json
 ```
 
-### Skip sections
+### Skip sections (text report only)
 
-Repeat `--skip` to omit parts of the text report:
+Repeat `--skip` to omit parts of the **text** report. **`--json` always returns the full structure** (all sections); `--skip` does not trim JSON.
+
+Unknown section names exit with code 2 and print the allowed list.
 
 **Python:** `inventory`, `complexity`, `imports`, `cycles`, `dead-exports`, `decorators`, `routes`
 
@@ -150,12 +153,18 @@ Use dedicated linters and dead-code tools for enforcement in CI; use **ast-scan*
 
 ## Contributing
 
-Issues and PRs welcome. When changing scanners, run:
+Issues and PRs welcome.
+
+1. Run scanners against a real tree (e.g. this repo’s backend/frontend).
+2. `python3 -m compileall python/ast_scan` and `cd typescript && npm run build`.
+3. If you change CLI flags or JSON shape, update this README.
 
 ```bash
-cd python && python -m ast_scan /path/to/package --pkg pkgname
+cd python && python3 -m ast_scan /path/to/package --pkg pkgname
 cd typescript && npm run build && node dist/scan.js /path/to/src
 ```
+
+**Publishing:** The npm package name `ast-scan` may already be taken on the public registry; use a [scoped name](https://docs.npmjs.com/cli/v10/using-npm/scope) (e.g. `@your-org/ast-scan`) in `typescript/package.json` if needed.
 
 ## License
 

@@ -48,6 +48,17 @@ interface CliConfig {
   title: string;
 }
 
+/** Sections omitted from the text report via --skip (does not affect --json). */
+const TS_TEXT_SKIP_SECTIONS = new Set([
+  "inventory",
+  "complexity",
+  "imports",
+  "cycles",
+  "dead-exports",
+  "component-props",
+  "hooks",
+]);
+
 // ── File collection ──────────────────────────────────────────────────────────
 
 function collectFiles(dir: string, exts: string[]): string[] {
@@ -838,12 +849,22 @@ function parseArgv(argv: string[]): CliConfig {
   const baseTitle =
     title ?? `${defaultName.toUpperCase()} — AST ANALYSIS (TypeScript)`;
 
+  const skipSet = new Set(skip);
+  const unknown = [...skipSet].filter((s) => !TS_TEXT_SKIP_SECTIONS.has(s));
+  if (unknown.length > 0) {
+    const valid = [...TS_TEXT_SKIP_SECTIONS].sort().join(", ");
+    console.error(
+      `ast-scan: unknown --skip section(s): ${unknown.sort().join(", ")}. Valid: ${valid}`,
+    );
+    process.exit(2);
+  }
+
   return {
     scanRoot,
     aliasPrefix,
     top,
     json,
-    skip: new Set(skip),
+    skip: skipSet,
     title: baseTitle,
   };
 }
@@ -858,9 +879,9 @@ Options:
   --alias PREFIX    Path alias for internal imports (default: @/)
   --top N           Number of items in ranked sections (default: 20)
   --title TEXT      Report title
-  --json            Emit JSON instead of text report
-  --skip SECTION    Repeatable. Sections: inventory, complexity, imports,
-                    cycles, dead-exports, component-props, hooks
+  --json            Emit JSON instead of text report (full payload; --skip ignored)
+  --skip SECTION    Repeatable; text report only. Sections: inventory, complexity,
+                    imports, cycles, dead-exports, component-props, hooks
   -h, --help        Show help
 `);
 }
