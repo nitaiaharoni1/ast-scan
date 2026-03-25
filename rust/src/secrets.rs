@@ -62,7 +62,7 @@ fn re_slack() -> &'static Regex {
 fn re_google_api() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"^AIza[0-9A-Za-z\-_]{35}$").expect("google api regex")
+        Regex::new(r"^AIza[0-9A-Za-z_-]{35}$").expect("google api regex")
     })
 }
 
@@ -76,6 +76,7 @@ fn re_sendgrid() -> &'static Regex {
 fn re_pem_header() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
+        // No anchors: PEM header may be embedded in a multiline string literal
         Regex::new(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----")
             .expect("pem regex")
     })
@@ -84,6 +85,7 @@ fn re_pem_header() -> &'static Regex {
 fn re_db_url() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
+        // No ^ anchor: connection string may appear inside a longer string value
         Regex::new(r"(postgres|mysql|mongodb)://[^:@\s]{1,64}:[^@\s]{1,128}@")
             .expect("db url regex")
     })
