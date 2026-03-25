@@ -44,6 +44,51 @@ fn re_github() -> &'static Regex {
     })
 }
 
+fn re_jwt() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"^eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$")
+            .expect("jwt regex")
+    })
+}
+
+fn re_slack() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"^xox[baprs]-[0-9A-Za-z-]{10,}$").expect("slack regex")
+    })
+}
+
+fn re_google_api() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"^AIza[0-9A-Za-z\-_]{35}$").expect("google api regex")
+    })
+}
+
+fn re_sendgrid() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"^SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$").expect("sendgrid regex")
+    })
+}
+
+fn re_pem_header() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----")
+            .expect("pem regex")
+    })
+}
+
+fn re_db_url() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(postgres|mysql|mongodb)://[^:@\s]{1,64}:[^@\s]{1,128}@")
+            .expect("db url regex")
+    })
+}
+
 /// Inspect a string literal; returns a finding if it looks like a credential.
 pub(crate) fn audit_string_literal(
     value: &str,
@@ -78,6 +123,54 @@ pub(crate) fn audit_string_literal(
             file: file.into(),
             line,
             detail: "Possible GitHub personal access token pattern".into(),
+        });
+    }
+    if re_jwt().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "jwt_token".into(),
+            file: file.into(),
+            line,
+            detail: "Possible hardcoded JWT token".into(),
+        });
+    }
+    if re_slack().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "slack_token".into(),
+            file: file.into(),
+            line,
+            detail: "Possible Slack API token (xox...)".into(),
+        });
+    }
+    if re_google_api().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "google_api_key".into(),
+            file: file.into(),
+            line,
+            detail: "Possible Google API key (AIza...)".into(),
+        });
+    }
+    if re_sendgrid().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "sendgrid_api_key".into(),
+            file: file.into(),
+            line,
+            detail: "Possible SendGrid API key (SG....)".into(),
+        });
+    }
+    if re_pem_header().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "private_key_pem".into(),
+            file: file.into(),
+            line,
+            detail: "Possible PEM private key header in string literal".into(),
+        });
+    }
+    if re_db_url().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "db_connection_string".into(),
+            file: file.into(),
+            line,
+            detail: "Possible database URL with embedded credentials".into(),
         });
     }
 
