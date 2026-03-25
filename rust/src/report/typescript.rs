@@ -6,7 +6,8 @@ use super::{
     fmt_grouped_u64, has_todo_markers, print_code_clones_section, print_cognitive_section,
     print_counted_list, print_counted_list_with_files, print_coupling_table, print_cycles,
     print_dead_exports, print_files_by_lines, print_import_top_modules, print_security_audit_section,
-    print_test_prod_lines, print_todo_audit_body, section_header, sep, sub_header,
+    print_test_prod_lines, print_todo_audit_body, print_type1_clones_section, section_header, sep,
+    sub_header,
 };
 
 fn section_summary(data: &Value, title: &str, skip: &HashSet<String>) {
@@ -477,6 +478,7 @@ pub(crate) fn print_ts_report(data: &Value, title: &str, top: usize, skip: &Hash
         section_cycles(data);
     }
     if !skip.contains("code-clones") {
+        print_type1_clones_section(data, top);
         print_code_clones_section(data, top);
     }
     if !skip.contains("dead-exports") {

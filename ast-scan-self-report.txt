@@ -3,8 +3,8 @@
 ========================================================================
 
   Files analyzed:      19
-  Total lines:         7,117
-  Functions:           312
+  Total lines:         7,108
+  Functions:           311
   Structs / enums:     52
   Traits:              1
   Internal imports:    114
@@ -14,7 +14,7 @@
   1. INVENTORY — Top 20 Largest Files
 ========================================================================
     806 lines  ts_scanner/file.rs
-    754 lines  python_scanner/visitors.rs
+    745 lines  python_scanner/visitors.rs
     612 lines  rust_scanner/file.rs
     580 lines  main.rs
     512 lines  report/typescript.rs
@@ -126,7 +126,7 @@
   depth= 4  check_thresholds  [main.rs:327]
   depth= 4  collect_all_export_strings  [python_scanner/file.rs:23]
   depth= 4  collect_py_files  [python_scanner/mod.rs:57]
-  depth= 4  check_silent_handler  [python_scanner/visitors.rs:699]
+  depth= 4  check_silent_handler  [python_scanner/visitors.rs:690]
   depth= 4  section_nesting  [report/python.rs:101]
   depth= 4  section_nesting  [report/rust_report.rs:128]
   depth= 4  section_inventory  [report/typescript.rs:49]
@@ -155,26 +155,26 @@
 
   Top 20 Most-Imported Internal Modules
   ------------------------------------------------------------
-     3x  report/print_counted_list
-     3x  report/section_header
      3x  report/print_cycles
-     3x  graph/unique_cycles
+     3x  report/sep
+     3x  report/print_counted_list
      3x  report/print_dead_exports
+     3x  graph/unique_cycles
+     3x  report/print_import_top_modules
      3x  graph/find_cycles
-     3x  report/has_todo_markers
-     3x  report/print_coupling_table
+     3x  report/section_header
      3x  report/print_todo_audit_body
      3x  audits/collect_todo_comments
-     3x  report/print_import_top_modules
-     3x  report/sep
+     3x  report/has_todo_markers
      3x  graph/compute_coupling
      3x  report/print_files_by_lines
+     3x  report/print_coupling_table
+     2x  ts_scanner
      2x  types/RouteInfo
-     2x  report/fmt_grouped_u64
-     2x  report/print_parse_errors_body
-     2x  types/RsFileData
      2x  report/sub_header
-     2x  types/BoundaryRule
+     2x  report/fmt_grouped_u64
+     2x  types/ImportEdge
+     2x  report/print_parse_errors_body
 
   Top 15 External Crates
   ------------------------------------------------------------
@@ -187,12 +187,12 @@
      3x  oxc_ast
      3x  rayon
      2x  oxc_ast_visit
-     2x  regex
      2x  oxc_span
-     1x  walkdir
-     1x  python
-     1x  oxc_parser
+     2x  regex
      1x  proc_macro2
+     1x  python
+     1x  walkdir
+     1x  typescript
 
 ========================================================================
   3b. MODULE COUPLING — Top 20
@@ -245,9 +245,7 @@
 ========================================================================
   8. #[allow(...)] LINT AUDIT
 ========================================================================
-  1 allow attribute(s):
-
-     1x  clippy::only_used_in_recursion
+  No #[allow(...)] attributes found.
 
 ========================================================================
   9. DERIVE MACRO AUDIT
@@ -257,11 +255,11 @@
     46x  Debug
     44x  Clone
     34x  Serialize
-     2x  Eq
-     2x  Default
-     2x  PartialEq
-     2x  Copy
      2x  Parser
+     2x  PartialEq
+     2x  Default
+     2x  Copy
+     2x  Eq
 
 ========================================================================
   10. TRAIT INVENTORY

@@ -6,7 +6,7 @@ use super::{
     has_parse_errors, has_todo_markers, print_code_clones_section, print_cognitive_section,
     print_counted_list, print_coupling_table, print_cycles, print_dead_exports, print_files_by_lines,
     print_import_top_modules, print_parse_errors_body, print_security_audit_section,
-    print_test_prod_lines, print_todo_audit_body, section_header, sep,
+    print_test_prod_lines, print_todo_audit_body, print_type1_clones_section, section_header, sep,
 };
 
 fn section_summary(data: &Value, title: &str, skip: &HashSet<String>) {
@@ -193,6 +193,28 @@ fn section_silent_except(data: &Value) {
     println!();
 }
 
+fn section_mutable_defaults(data: &Value) {
+    section_header("7b. MUTABLE DEFAULT ARGUMENTS");
+    if let Some(mds) = data["mutable_defaults"].as_array() {
+        if !mds.is_empty() {
+            println!("  Found {} function(s) with mutable default arguments:", mds.len());
+            for m in mds {
+                println!(
+                    "    {}:{}  {}({}={})",
+                    m["file"].as_str().unwrap_or(""),
+                    m["line"].as_u64().unwrap_or(0),
+                    m["func_name"].as_str().unwrap_or(""),
+                    m["param_name"].as_str().unwrap_or(""),
+                    m["kind"].as_str().unwrap_or("")
+                );
+            }
+        } else {
+            println!("  None found.");
+        }
+    }
+    println!();
+}
+
 fn section_decorators(data: &Value, top: usize) {
     section_header("8. DECORATOR AUDIT");
     println!();
@@ -275,6 +297,7 @@ pub(crate) fn print_python_report(data: &Value, title: &str, top: usize, skip: &
         section_cycles(data);
     }
     if !skip.contains("code-clones") {
+        print_type1_clones_section(data, top);
         print_code_clones_section(data, top);
     }
     if !skip.contains("dead-exports") {
@@ -285,6 +308,9 @@ pub(crate) fn print_python_report(data: &Value, title: &str, top: usize, skip: &
     }
     if !skip.contains("silent-except") {
         section_silent_except(data);
+    }
+    if !skip.contains("mutable-defaults") {
+        section_mutable_defaults(data);
     }
     if !skip.contains("decorators") {
         section_decorators(data, top);

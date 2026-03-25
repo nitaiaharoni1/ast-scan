@@ -1484,3 +1484,60 @@ pub(super) fn python_func_exact_hash(source: &str, range_start: usize, range_end
     let slice = source.get(range_start..range_end.min(source.len())).unwrap_or("");
     crate::clones::hash_exact(slice)
 }
+
+fn mutable_default_kind(expr: &Expr) -> Option<&'static str> {
+    match expr {
+        Expr::List(_) => Some("list"),
+        Expr::Dict(_) => Some("dict"),
+        Expr::Set(_) => Some("set"),
+        Expr::Call(_) => Some("call"),
+        _ => None,
+    }
+}
+
+/// Collect function arguments that have mutable default values.
+pub(super) fn collect_mutable_defaults(
+    args: &Arguments,
+    func_name: &str,
+    file: &str,
+    source: &str,
+) -> Vec<crate::types::MutableDefaultInfo> {
+    let mut out = Vec::new();
+    // posonlyargs, args, and kwonlyargs are all Vec<ArgWithDefault> in rustpython-parser 0.4
+    for arged in args
+        .posonlyargs
+        .iter()
+        .chain(args.args.iter())
+        .chain(args.kwonlyargs.iter())
+    {
+        if let Some(default) = &arged.default {
+            if let Some(kind) = mutable_default_kind(default) {
+                let line = line_at(source, default.range().start());
+                out.push(crate::types::MutableDefaultInfo {
+                    file: file.to_string(),
+                    line,
+                    func_name: func_name.to_string(),
+                    param_name: arged.def.arg.to_string(),
+                    kind: kind.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// If `stmt` is `from X import *`, return the fully-qualified module name.
+pub(super) fn collect_star_import(stmt: &Stmt, pkg: &str) -> Option<String> {
+    if let Stmt::ImportFrom(imp) = stmt {
+        // Check that names is exactly [*]
+        if imp.names.len() == 1 && imp.names[0].name.as_str() == "*" {
+            let module_str = imp.module.as_ref()?.as_str();
+            if imp.level.as_ref().is_some_and(|l| l.to_usize() > 0) {
+                // Relative import — treat as internal
+                return Some(format!("{}.{}", pkg, module_str));
+            }
+            return Some(module_str.to_string());
+        }
+    }
+    None
+}

@@ -14,9 +14,10 @@ use crate::audits::collect_todo_comments;
 use crate::types::{ImportEdge, PyClassInfo, PyFileData, PyFuncInfo, RouteInfo};
 
 use super::visitors::{
-    collect_py_security, collect_silent_excepts, compute_cognitive_complexity, compute_complexity,
-    compute_max_nesting, count_python_params, decorator_repr, extract_route, line_at, line_at_end,
-    process_import, python_body_shape_hash, python_func_exact_hash,
+    collect_mutable_defaults, collect_py_security, collect_silent_excepts, collect_star_import,
+    compute_cognitive_complexity, compute_complexity, compute_max_nesting, count_python_params,
+    decorator_repr, extract_route, line_at, line_at_end, process_import, python_body_shape_hash,
+    python_func_exact_hash,
 };
 use super::{display_rel, file_to_module};
 
@@ -81,6 +82,8 @@ struct FileAnalyzer<'a> {
     exports: Vec<String>,
     top_level_names: Vec<String>,
     routes: Vec<RouteInfo>,
+    mutable_defaults: Vec<crate::types::MutableDefaultInfo>,
+    star_imported_modules: Vec<String>,
     class_stack: Vec<String>,
 }
 
@@ -98,6 +101,8 @@ impl<'a> FileAnalyzer<'a> {
             exports: Vec::new(),
             top_level_names: Vec::new(),
             routes: Vec::new(),
+            mutable_defaults: Vec::new(),
+            star_imported_modules: Vec::new(),
             class_stack: Vec::new(),
         }
     }
@@ -136,6 +141,13 @@ impl<'a> FileAnalyzer<'a> {
             is_method,
             is_test: self.is_test_file,
         };
+        let mut mds = collect_mutable_defaults(
+            &node.args,
+            &qualname,
+            self.filepath,
+            self.source,
+        );
+        self.mutable_defaults.append(&mut mds);
         if let Some(r) = extract_route(
             node.name.as_ref(),
             &qualname,
@@ -188,6 +200,13 @@ impl<'a> FileAnalyzer<'a> {
             is_method,
             is_test: self.is_test_file,
         };
+        let mut mds = collect_mutable_defaults(
+            &node.args,
+            &qualname,
+            self.filepath,
+            self.source,
+        );
+        self.mutable_defaults.append(&mut mds);
         if let Some(r) = extract_route(
             node.name.as_ref(),
             &qualname,
@@ -264,6 +283,9 @@ impl<'a> FileAnalyzer<'a> {
                 }
                 Stmt::Import(_) | Stmt::ImportFrom(_) => {
                     process_import(item, self.module, self.pkg, &mut self.imports);
+                    if let Some(star_mod) = collect_star_import(item, self.pkg) {
+                        self.star_imported_modules.push(star_mod);
+                    }
                 }
                 _ => {}
             }
@@ -323,6 +345,8 @@ pub(super) fn analyze_py_file(fpath: &Path, scan_root: &Path, pkg: &str) -> Opti
         imports: an.imports,
         top_level_names: an.top_level_names,
         routes: an.routes,
+        mutable_defaults: an.mutable_defaults,
+        star_imported_modules: an.star_imported_modules,
         silent_excepts,
         todo_freq,
         todo_samples,

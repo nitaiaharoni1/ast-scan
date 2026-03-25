@@ -318,3 +318,86 @@ fn parallel_multi_lang_json_same_as_sequential() {
     assert!(py_files >= 1, "python should find files");
     assert!(ts_files >= 1, "typescript should find files");
 }
+
+#[test]
+fn complexity_rows_include_lines() {
+    let root = workspace_root().join("fixtures/minimal-py");
+    let out = run_cmd(|c| {
+        c.args(["--python", "--json", "--pkg", "pkg"]).arg(&root);
+    });
+    let v = assert_json_success(&out);
+    let row0 = v["complexity"]
+        .as_array()
+        .and_then(|a| a.first())
+        .expect("complexity non-empty");
+    assert!(
+        row0.get("lines").is_some(),
+        "complexity row must include 'lines' field, got: {:?}",
+        row0
+    );
+}
+
+#[test]
+fn ts_complexity_rows_include_lines() {
+    let root = workspace_root().join("fixtures/minimal-ts");
+    let out = run_cmd(|c| {
+        c.args(["--typescript", "--json"]).arg(&root);
+    });
+    let v = assert_json_success(&out);
+    let row0 = v["complexity"]
+        .as_array()
+        .and_then(|a| a.first())
+        .expect("ts complexity non-empty");
+    assert!(row0.get("lines").is_some(), "ts complexity row must include 'lines'");
+}
+
+#[test]
+fn json_has_type1_clones_key() {
+    let root = workspace_root().join("fixtures/minimal-py");
+    let out = run_cmd(|c| {
+        c.args(["--python", "--json", "--pkg", "pkg"]).arg(&root);
+    });
+    let v = assert_json_success(&out);
+    assert!(v.get("type1_clones").is_some(), "python JSON must include type1_clones key");
+}
+
+#[test]
+fn mutable_defaults_detected() {
+    let root = workspace_root().join("fixtures/minimal-py");
+    let out = run_cmd(|c| {
+        c.args(["--python", "--json", "--pkg", "pkg"]).arg(&root);
+    });
+    let v = assert_json_success(&out);
+    let mds = v["mutable_defaults"].as_array().expect("mutable_defaults is array");
+    assert!(
+        !mds.is_empty(),
+        "should detect mutable defaults in fixtures/minimal-py/mutable_defaults.py"
+    );
+    let first = &mds[0];
+    assert!(first.get("func_name").is_some());
+    assert!(first.get("param_name").is_some());
+    assert!(first.get("kind").is_some());
+}
+
+#[test]
+fn max_lines_threshold_fails() {
+    let root = workspace_root().join("fixtures/minimal-py");
+    let out = run_cmd(|c| {
+        c.args(["--python", "--pkg", "pkg", "--max-lines", "1"])
+            .arg(&root);
+    });
+    assert!(
+        !out.status.success(),
+        "expected threshold exit for --max-lines 1"
+    );
+}
+
+#[test]
+fn mutable_defaults_skip_section() {
+    let root = workspace_root().join("fixtures/minimal-py");
+    let out = run_cmd(|c| {
+        c.args(["--python", "--pkg", "pkg", "--skip", "mutable-defaults"])
+            .arg(&root);
+    });
+    assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
+}

@@ -217,7 +217,7 @@ pub(crate) fn print_cognitive_section(data: &Value, top: usize, header_suffix: &
 }
 
 pub(crate) fn print_code_clones_section(data: &Value, top: usize) {
-    section_header(&format!("CLONE GROUPS — Top {top} (structural hash, >10 lines)"));
+    section_header(&format!("Type-2 CLONE GROUPS — Top {top} (structural hash, >10 lines)"));
     if let Some(arr) = data["code_clones"].as_array() {
         if arr.is_empty() {
             println!("  None found.");
@@ -226,6 +226,37 @@ pub(crate) fn print_code_clones_section(data: &Value, top: usize) {
                 let cnt = g["count"].as_u64().unwrap_or(0);
                 let h = g["hash"].as_str().unwrap_or("");
                 println!("  [{h}] {cnt} similar function(s):");
+                if let Some(funcs) = g["functions"].as_array() {
+                    for f in funcs.iter().take(8) {
+                        println!(
+                            "      {}  [{}:{}] ({} lines)",
+                            f["name"].as_str().unwrap_or(""),
+                            f["file"].as_str().unwrap_or(""),
+                            f["line"].as_u64().unwrap_or(0),
+                            f["lines"].as_u64().unwrap_or(0)
+                        );
+                    }
+                    if funcs.len() > 8 {
+                        println!("      ... and {} more", funcs.len() - 8);
+                    }
+                }
+                println!();
+            }
+        }
+    }
+    println!();
+}
+
+pub(crate) fn print_type1_clones_section(data: &Value, top: usize) {
+    section_header(&format!("Type-1 CLONE GROUPS — Top {top} (exact text hash, >10 lines)"));
+    if let Some(arr) = data["type1_clones"].as_array() {
+        if arr.is_empty() {
+            println!("  None found.");
+        } else {
+            for g in arr.iter().take(top) {
+                let cnt = g["count"].as_u64().unwrap_or(0);
+                let h = g["hash"].as_str().unwrap_or("");
+                println!("  [{h}] {cnt} exact duplicate function(s):");
                 if let Some(funcs) = g["functions"].as_array() {
                     for f in funcs.iter().take(8) {
                         println!(

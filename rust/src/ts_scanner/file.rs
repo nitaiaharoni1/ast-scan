@@ -692,6 +692,7 @@ pub(crate) fn analyze_ts_file(
     let mut classes = Vec::new();
     let mut imports = Vec::new();
     let mut exports = Vec::new();
+    let mut star_reexport_sources = Vec::new();
     let is_test_file = is_ts_test_path(&rel);
 
     let mut ts_st = TsFuncScanState {
@@ -706,6 +707,13 @@ pub(crate) fn analyze_ts_file(
         match stmt {
             Statement::ImportDeclaration(im) => {
                 ingest_import_declaration(im, &abs, scan_root, alias_prefix, file_src, &mut imports);
+            }
+            Statement::ExportAllDeclaration(ex) => {
+                let imp_path = ex.source.value.as_str();
+                let (is_internal, resolved) = resolve_import(imp_path, &abs, scan_root, alias_prefix);
+                if is_internal {
+                    star_reexport_sources.push(resolved);
+                }
             }
             Statement::ExportNamedDeclaration(ex) => {
                 let mut ctx = FileCtx {
@@ -763,6 +771,12 @@ pub(crate) fn analyze_ts_file(
     let mut security_findings = Vec::new();
     collect_ts_security(program, &rel, file_src, &mut security_findings);
 
+    let namespace_import_sources: Vec<String> = imports
+        .iter()
+        .filter(|i| i.is_internal && i.specifiers.iter().any(|s| s.starts_with("* as ")))
+        .map(|i| i.resolved_path.clone())
+        .collect();
+
     Some(TsFileData {
         rel_path: rel,
         abs_path: abs.display().to_string(),
@@ -771,6 +785,8 @@ pub(crate) fn analyze_ts_file(
         classes,
         imports,
         exports,
+        star_reexport_sources,
+        namespace_import_sources,
         source,
         any_count,
         console_debugger,

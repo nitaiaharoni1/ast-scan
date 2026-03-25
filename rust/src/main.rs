@@ -30,6 +30,7 @@ const PY_TEXT_SKIP: &[&str] = &[
     "coupling",
     "cycles",
     "dead-exports",
+    "mutable-defaults",
     "silent-except",
     "todo-audit",
     "decorators",
@@ -101,6 +102,9 @@ struct Cli {
 
     #[arg(long, help = "Exit 1 if circular import count exceeds N")]
     max_cycles: Option<u64>,
+
+    #[arg(long, help = "Exit 1 if any function exceeds N lines")]
+    max_lines: Option<u64>,
 
     #[arg(
         long,
@@ -343,6 +347,7 @@ fn check_thresholds(
     max_params: Option<u64>,
     max_nest: Option<u64>,
     max_cyc: Option<u64>,
+    max_lines: Option<u64>,
 ) -> Vec<String> {
     let mut violations = Vec::new();
 
@@ -404,6 +409,23 @@ fn check_thresholds(
                 if depth > limit {
                     violations.push(format!(
                         "depth={depth} exceeds --max-nesting {limit}: {} [{}:{}]",
+                        row["name"].as_str().unwrap_or(""),
+                        row["file"].as_str().unwrap_or(""),
+                        row["line"].as_u64().unwrap_or(0)
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(limit) = max_lines {
+        if let Some(arr) = data["complexity"].as_array() {
+            for row in arr {
+                let lines = row["lines"].as_u64().unwrap_or(0);
+                if lines > limit {
+                    violations.push(format!(
+                        "lines={lines} exceeds --max-lines {limit}: {} [{}:{}]",
                         row["name"].as_str().unwrap_or(""),
                         row["file"].as_str().unwrap_or(""),
                         row["line"].as_u64().unwrap_or(0)
@@ -587,6 +609,7 @@ fn emit_output(
                 cli.max_params,
                 cli.max_nesting,
                 cli.max_cycles,
+                cli.max_lines,
             )
             .into_iter()
             .map(|v| format!("[{}] {}", mode.threshold_label(), v)),

@@ -64,6 +64,8 @@ struct TsImportGraph {
     in_degree: HashMap<String, usize>,
     all_modules: HashSet<String>,
     imported_names_map: HashMap<String, HashSet<String>>,
+    /// Modules fully consumed via `export *` or `import * as`.
+    star_consumed: HashSet<String>,
 }
 
 fn build_import_graph(all_data: &[TsFileData], root: &Path) -> TsImportGraph {
@@ -99,11 +101,20 @@ fn build_import_graph(all_data: &[TsFileData], root: &Path) -> TsImportGraph {
         }
     }
 
+    let star_consumed: HashSet<String> = all_data
+        .iter()
+        .flat_map(|d| {
+            d.star_reexport_sources.iter().chain(d.namespace_import_sources.iter())
+        })
+        .map(|s| file::normalize_module_path(s))
+        .collect();
+
     TsImportGraph {
         graph,
         in_degree,
         all_modules,
         imported_names_map,
+        star_consumed,
     }
 }
 
@@ -111,6 +122,7 @@ fn find_dead_exports(
     all_data: &[TsFileData],
     root: &Path,
     imported_names_map: &HashMap<String, HashSet<String>>,
+    star_consumed: &HashSet<String>,
 ) -> Vec<(String, String)> {
     let index_re = regex::Regex::new(r"/index\.(tsx?|jsx?)$")
         .expect("static index route regex for dead-export heuristic");
@@ -123,7 +135,7 @@ fn find_dead_exports(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-        if entry_points.contains(base_name) || index_re.is_match(rel) {
+        if entry_points.contains(base_name) || index_re.is_match(rel) || star_consumed.contains(&rel_norm) {
             continue;
         }
         let imported = imported_names_map
@@ -393,6 +405,7 @@ fn build_json(
             "cognitive": fn_.cognitive_complexity,
             "params": fn_.param_count,
             "nesting": fn_.nesting,
+            "lines": fn_.line_count,
             "file": fn_.file,
             "line": fn_.line,
             "is_component": fn_.is_component,
@@ -603,7 +616,7 @@ pub(crate) fn analyze_typescript(
         .collect();
 
     let ig = build_import_graph(&all_data, &root);
-    let dead_exports = find_dead_exports(&all_data, &root, &ig.imported_names_map);
+    let dead_exports = find_dead_exports(&all_data, &root, &ig.imported_names_map, &ig.star_consumed);
     let ext_sorted = build_ext_freq(&all_data);
     let audits = collect_text_audits(&all_data);
 

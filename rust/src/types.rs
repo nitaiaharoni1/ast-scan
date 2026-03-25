@@ -47,6 +47,16 @@ pub(crate) struct RouteInfo {
     pub dependencies: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MutableDefaultInfo {
+    pub file: String,
+    pub line: usize,
+    pub func_name: String,
+    pub param_name: String,
+    /// "list", "dict", "set", or "call"
+    pub kind: String,
+}
+
 // ── TypeScript-specific types ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +111,8 @@ pub(crate) struct TsFileData {
     pub classes: Vec<TsClassInfo>,
     pub imports: Vec<TsImportInfo>,
     pub exports: Vec<String>,
+    pub star_reexport_sources: Vec<String>,
+    pub namespace_import_sources: Vec<String>,
     pub source: String,
     pub any_count: usize,
     pub console_debugger: Vec<ConsoleDebuggerInfo>,
@@ -138,6 +150,8 @@ pub(crate) struct PyFileData {
     pub imports: Vec<ImportEdge>,
     pub top_level_names: Vec<String>,
     pub routes: Vec<RouteInfo>,
+    pub mutable_defaults: Vec<MutableDefaultInfo>,
+    pub star_imported_modules: Vec<String>,
     pub silent_excepts: Vec<SilentCatchInfo>,
     pub todo_freq: HashMap<String, usize>,
     pub todo_samples: HashMap<String, Vec<String>>,

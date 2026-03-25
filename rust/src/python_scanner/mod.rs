@@ -90,6 +90,8 @@ struct PyCollectedData {
     file_lines: HashMap<String, usize>,
     decorator_freq: HashMap<String, usize>,
     imported_names: HashMap<String, HashSet<String>>,
+    all_mutable_defaults: Vec<crate::types::MutableDefaultInfo>,
+    star_imported_modules: Vec<String>,
     all_silent: Vec<crate::types::SilentCatchInfo>,
     todo_freq: HashMap<String, usize>,
     todo_samples: HashMap<String, Vec<String>>,
@@ -115,6 +117,8 @@ fn collect_and_aggregate(
     let mut file_lines: HashMap<String, usize> = HashMap::new();
     let mut decorator_freq: HashMap<String, usize> = HashMap::new();
     let mut imported_names: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut all_mutable_defaults: Vec<crate::types::MutableDefaultInfo> = Vec::new();
+    let mut star_imported_modules: Vec<String> = Vec::new();
     let mut all_silent = Vec::new();
     let mut todo_freq: HashMap<String, usize> = HashMap::new();
     let mut todo_samples: HashMap<String, Vec<String>> = HashMap::new();
@@ -175,6 +179,8 @@ fn collect_and_aggregate(
                 all_classes.extend(fd.classes);
                 all_imports.extend(fd.imports);
                 all_routes.extend(fd.routes);
+                all_mutable_defaults.extend(fd.mutable_defaults);
+                star_imported_modules.extend(fd.star_imported_modules);
                 module_top_names.insert(fd.module, fd.top_level_names);
                 all_silent.extend(fd.silent_excepts);
 
@@ -212,6 +218,8 @@ fn collect_and_aggregate(
         file_lines,
         decorator_freq,
         imported_names,
+        all_mutable_defaults,
+        star_imported_modules,
         all_silent,
         todo_freq,
         todo_samples,
@@ -298,9 +306,14 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
     let raw_cycles = find_cycles(&graph);
     let unique = unique_cycles(&raw_cycles);
 
+    let star_consumed: HashSet<String> = cd.star_imported_modules.into_iter().collect();
+
     let skip_private: HashSet<&str> = ["__init__", "__all__", "__version__"].into_iter().collect();
     let mut dead: Vec<serde_json::Value> = Vec::new();
     for (mod_name, names) in &cd.module_top_names {
+        if star_consumed.contains(mod_name) {
+            continue;
+        }
         let used = cd.imported_names.get(mod_name).cloned().unwrap_or_default();
         for name in names {
             if name.starts_with('_') || skip_private.contains(name.as_str()) {
@@ -354,6 +367,7 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
             "cognitive": fn_.cognitive_complexity,
             "params": fn_.param_count,
             "nesting": fn_.nesting,
+            "lines": fn_.line_count,
             "file": display_rel(Path::new(&fn_.file), scan_root),
             "line": fn_.line,
             "is_method": fn_.is_method,
@@ -382,6 +396,9 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
 
     let code_clones = build_code_clones_py(scan_root, &cd.all_functions);
     let type1_clones = build_type1_clones_py(scan_root, &cd.all_functions);
+
+    let mut mutable_defaults = cd.all_mutable_defaults;
+    mutable_defaults.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
 
     let mut security_sorted = cd.all_security;
     security_sorted.sort_by(|a, b| {
@@ -479,6 +496,7 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
         "nesting": nesting_rows,
         "code_clones": code_clones,
         "type1_clones": type1_clones,
+        "mutable_defaults": serde_json::to_value(&mutable_defaults).unwrap_or(serde_json::Value::Null),
         "security_audit": {
             "total": security_sorted.len(),
             "findings": serde_json::to_value(&security_sorted).unwrap_or(serde_json::Value::Null),

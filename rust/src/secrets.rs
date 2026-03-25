@@ -91,6 +91,28 @@ fn re_db_url() -> &'static Regex {
     })
 }
 
+fn re_heroku() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+            .expect("heroku regex")
+    })
+}
+
+fn re_mailgun() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"^key-[0-9a-zA-Z]{32}$").expect("mailgun regex")
+    })
+}
+
+fn re_twilio() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"^AC[0-9a-fA-F]{32}$").expect("twilio regex")
+    })
+}
+
 /// Inspect a string literal; returns a finding if it looks like a credential.
 pub(crate) fn audit_string_literal(
     value: &str,
@@ -173,6 +195,30 @@ pub(crate) fn audit_string_literal(
             file: file.into(),
             line,
             detail: "Possible database URL with embedded credentials".into(),
+        });
+    }
+    if re_heroku().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "heroku_api_key".into(),
+            file: file.into(),
+            line,
+            detail: "Possible Heroku API key (UUID pattern)".into(),
+        });
+    }
+    if re_mailgun().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "mailgun_api_key".into(),
+            file: file.into(),
+            line,
+            detail: "Possible Mailgun API key (key-...)".into(),
+        });
+    }
+    if re_twilio().is_match(trimmed) {
+        return Some(SecurityFinding {
+            kind: "twilio_sid".into(),
+            file: file.into(),
+            line,
+            detail: "Possible Twilio Account SID (AC...)".into(),
         });
     }
 
