@@ -256,6 +256,35 @@ fn build_code_clones_py(
         .collect()
 }
 
+fn build_type1_clones_py(
+    scan_root: &Path,
+    funcs: &[crate::types::PyFuncInfo],
+) -> Vec<serde_json::Value> {
+    let mut m: HashMap<u64, Vec<&crate::types::PyFuncInfo>> = HashMap::new();
+    for f in funcs {
+        if f.line_count > CLONE_MIN_LINES {
+            m.entry(f.exact_clone_hash).or_default().push(f);
+        }
+    }
+    let mut groups: Vec<_> = m.into_iter().filter(|(_, v)| v.len() > 1).collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    groups
+        .into_iter()
+        .map(|(h, vs)| {
+            serde_json::json!({
+                "hash": format!("{h:016x}"),
+                "count": vs.len(),
+                "functions": vs.iter().map(|f| serde_json::json!({
+                    "name": f.qualname,
+                    "file": display_rel(Path::new(&f.file), scan_root),
+                    "line": f.line,
+                    "lines": f.line_count,
+                })).collect::<Vec<_>>()
+            })
+        })
+        .collect()
+}
+
 fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::Value {
     let mut graph: HashMap<String, HashSet<String>> = HashMap::new();
     for edge in &cd.all_imports {
@@ -352,6 +381,7 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
     });
 
     let code_clones = build_code_clones_py(scan_root, &cd.all_functions);
+    let type1_clones = build_type1_clones_py(scan_root, &cd.all_functions);
 
     let mut security_sorted = cd.all_security;
     security_sorted.sort_by(|a, b| {
@@ -448,6 +478,7 @@ fn build_json(cd: PyCollectedData, scan_root: &Path, pkg: &str) -> serde_json::V
         "cognitive": cognitive_rows,
         "nesting": nesting_rows,
         "code_clones": code_clones,
+        "type1_clones": type1_clones,
         "security_audit": {
             "total": security_sorted.len(),
             "findings": serde_json::to_value(&security_sorted).unwrap_or(serde_json::Value::Null),

@@ -18,6 +18,8 @@ pub(crate) struct PyFuncInfo {
     pub param_count: usize,
     /// Structural fingerprint for clone detection (normalized AST shape).
     pub clone_hash: u64,
+    /// Exact text hash (whitespace-normalised) for Type-1 clone detection.
+    pub exact_clone_hash: u64,
     pub decorators: Vec<String>,
     pub is_method: bool,
     /// True when the containing file is classified as a test file.
@@ -59,6 +61,7 @@ pub(crate) struct TsFuncInfo {
     pub nesting: usize,
     pub param_count: usize,
     pub clone_hash: u64,
+    pub exact_clone_hash: u64,
     pub exported: bool,
     pub is_component: bool,
     pub props: Vec<String>,

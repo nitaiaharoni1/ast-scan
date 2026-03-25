@@ -1478,3 +1478,9 @@ fn collect_silent_stmt(
         }
     });
 }
+
+/// Hash the raw source slice of a function (whitespace-normalised) for Type-1 clone detection.
+pub(super) fn python_func_exact_hash(source: &str, range_start: usize, range_end: usize) -> u64 {
+    let slice = source.get(range_start..range_end.min(source.len())).unwrap_or("");
+    crate::clones::hash_exact(slice)
+}

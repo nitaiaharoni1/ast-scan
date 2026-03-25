@@ -217,6 +217,32 @@ fn build_code_clones_ts(funcs: &[crate::types::TsFuncInfo]) -> Vec<Value> {
         .collect()
 }
 
+fn build_type1_clones_ts(funcs: &[crate::types::TsFuncInfo]) -> Vec<Value> {
+    let mut m: HashMap<u64, Vec<&crate::types::TsFuncInfo>> = HashMap::new();
+    for f in funcs {
+        if f.line_count > CLONE_MIN_LINES_TS {
+            m.entry(f.exact_clone_hash).or_default().push(f);
+        }
+    }
+    let mut groups: Vec<_> = m.into_iter().filter(|(_, v)| v.len() > 1).collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    groups
+        .into_iter()
+        .map(|(h, vs)| {
+            json!({
+                "hash": format!("{h:016x}"),
+                "count": vs.len(),
+                "functions": vs.iter().map(|f| json!({
+                    "name": f.name,
+                    "file": f.file,
+                    "line": f.line,
+                    "lines": f.line_count,
+                })).collect::<Vec<_>>()
+            })
+        })
+        .collect()
+}
+
 fn build_json(
     all_data: &[TsFileData],
     root: &Path,
@@ -357,6 +383,7 @@ fn build_json(
     });
 
     let code_clones = build_code_clones_ts(&all_functions);
+    let type1_clones = build_type1_clones_ts(&all_functions);
 
     let mut complexity_rows: Vec<_> = all_functions
         .iter()
@@ -499,6 +526,7 @@ fn build_json(
         "cognitive": cognitive_rows,
         "nesting": nesting_rows,
         "code_clones": code_clones,
+        "type1_clones": type1_clones,
         "security_audit": {
             "total": all_security.len(),
             "findings": serde_json::to_value(&all_security)?,

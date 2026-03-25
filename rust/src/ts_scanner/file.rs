@@ -22,6 +22,12 @@ use super::visitors::{
     ts_expression_shape_hash, ts_function_body_shape_hash,
 };
 
+fn exact_hash_from_span(source: &str, start: u32, end: u32) -> u64 {
+    let s = start as usize;
+    let e = (end as usize).min(source.len());
+    crate::clones::hash_exact(source.get(s..e).unwrap_or(""))
+}
+
 pub(crate) fn display_rel(abs: &Path, scan_root: &Path) -> String {
     if let Some(parent) = scan_root.parent() {
         if let Ok(p) = abs.strip_prefix(parent) {
@@ -318,6 +324,7 @@ fn process_function<'a>(
     let cognitive_complexity = cognitive_function_body(body);
     let param_count = count_ts_formal_params(&func.params);
     let clone_hash = ts_function_body_shape_hash(body);
+    let exact_clone_hash = exact_hash_from_span(st.source, func.span.start, func.span.end);
     let is_comp = st.is_tsx && is_component_name(&name) && jsx;
     let props = if is_comp {
         extract_props_function(func)
@@ -336,6 +343,7 @@ fn process_function<'a>(
         nesting: nest,
         param_count,
         clone_hash,
+        exact_clone_hash,
         exported,
         is_component: is_comp,
         props,
@@ -374,6 +382,7 @@ fn process_arrow_var<'a>(
             count_ts_formal_params(&arr.params),
         )
     };
+    let exact_clone_hash = exact_hash_from_span(st.source, arr.span.start, arr.span.end);
     let is_comp = st.is_tsx && is_component_name(&name) && jsx;
     let props = if is_comp {
         extract_props_arrow(arr)
@@ -392,6 +401,7 @@ fn process_arrow_var<'a>(
         nesting: nest,
         param_count,
         clone_hash,
+        exact_clone_hash,
         exported,
         is_component: is_comp,
         props,

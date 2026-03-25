@@ -16,7 +16,7 @@ use crate::types::{ImportEdge, PyClassInfo, PyFileData, PyFuncInfo, RouteInfo};
 use super::visitors::{
     collect_py_security, collect_silent_excepts, compute_cognitive_complexity, compute_complexity,
     compute_max_nesting, count_python_params, decorator_repr, extract_route, line_at, line_at_end,
-    process_import, python_body_shape_hash,
+    process_import, python_body_shape_hash, python_func_exact_hash,
 };
 use super::{display_rel, file_to_module};
 
@@ -115,6 +115,9 @@ impl<'a> FileAnalyzer<'a> {
         let nesting = compute_max_nesting(&node.body);
         let param_count = count_python_params(&node.args, is_method);
         let clone_hash = python_body_shape_hash(&node.body);
+        let start = usize::from(node.range().start());
+        let end = usize::from(node.range().end());
+        let exact_clone_hash = python_func_exact_hash(self.source, start, end);
         let decorators: Vec<_> = node.decorator_list.iter().map(decorator_repr).collect();
         let info = PyFuncInfo {
             name: node.name.to_string(),
@@ -128,6 +131,7 @@ impl<'a> FileAnalyzer<'a> {
             nesting,
             param_count,
             clone_hash,
+            exact_clone_hash,
             decorators: decorators.clone(),
             is_method,
             is_test: self.is_test_file,
@@ -163,6 +167,9 @@ impl<'a> FileAnalyzer<'a> {
         let nesting = compute_max_nesting(&node.body);
         let param_count = count_python_params(&node.args, is_method);
         let clone_hash = python_body_shape_hash(&node.body);
+        let start = usize::from(node.range().start());
+        let end = usize::from(node.range().end());
+        let exact_clone_hash = python_func_exact_hash(self.source, start, end);
         let decorators: Vec<_> = node.decorator_list.iter().map(decorator_repr).collect();
         let info = PyFuncInfo {
             name: node.name.to_string(),
@@ -176,6 +183,7 @@ impl<'a> FileAnalyzer<'a> {
             nesting,
             param_count,
             clone_hash,
+            exact_clone_hash,
             decorators: decorators.clone(),
             is_method,
             is_test: self.is_test_file,
